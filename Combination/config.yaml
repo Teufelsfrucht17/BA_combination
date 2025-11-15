@@ -1,0 +1,97 @@
+# config.yaml - Zentrale Konfiguration für BA_combination Unified Version
+
+data:
+  universe:
+    - "SAP.DE"
+    - "SIE.DE"
+    - "ALV.DE"
+    - "BAS.DE"
+    - "BAY.DE"
+    - "BMW.DE"
+    - "VOW3.DE"
+    - "MBG.DE"
+    - "CONT.DE"
+    - "DTG.DE"
+
+  indices:
+    - ".GDAXI"  # DAX Index
+    - ".V1XI"   # VDAX Index
+
+  fields:
+    - "OPEN_PRC"
+    - "HIGH_1"
+    - "LOW_1"
+    - "TRDPRC_1"
+    - "VOLUME"
+
+  periods:
+    daily:
+      interval: "D"
+      start: "2015-01-01"
+      end: "2025-11-15"
+
+    intraday:
+      interval: "30min"
+      start: "2024-01-01"
+      end: "2025-11-15"
+
+features:
+  # X-Variablen (anpassbar)
+  input_features:
+    - momentum_5     # 5-Perioden Momentum
+    - momentum_10    # 10-Perioden Momentum
+    - change_dax     # DAX Änderung
+    - vdax_absolute  # VDAX absoluter Wert
+    - volume_ratio   # Volume Verhältnis
+
+  # Y-Variable (Ziel)
+  target: "price_change_next"
+
+  # Feature Engineering Parameter
+  momentum_periods: [5, 10, 20]
+  rolling_window: 20
+
+models:
+  # Alle Modelle aus Version 1
+  pytorch_nn:
+    enabled: true
+    hidden1: 64
+    hidden2: 32
+    epochs: 200
+    batch_size: 64
+    learning_rate: 0.001
+    validation_split: 0.2
+
+  sklearn_nn:
+    enabled: true
+    hidden_layer_sizes: [64, 32]
+    max_iter: 500
+
+  ols:
+    enabled: true
+
+  ridge:
+    enabled: true
+    alpha_values: [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+
+  random_forest:
+    enabled: true
+    n_estimators: 300
+    max_depth: 10
+    min_samples_split: 5
+
+training:
+  test_split: 0.2
+  cross_validation:
+    enabled: true
+    n_splits: 5
+    type: "TimeSeriesSplit"
+
+  scaling:
+    method: "StandardScaler"  # oder "MinMaxScaler"
+
+output:
+  save_models: true
+  save_predictions: true
+  save_comparison: true
+  format: "excel"  # und/oder "csv"
