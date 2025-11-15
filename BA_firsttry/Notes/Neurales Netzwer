@@ -1,0 +1,172 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader, random_split
+
+from Dataprep2 import finalrunner
+
+
+class SimpleNet(nn.Module):
+    """Sehr simples MLP: 1 -> 32 -> 16 -> 3"""
+
+    def __init__(self, in_features: int = 1, hidden1: int = 32, hidden2: int = 16, out_features: int = 3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_features, hidden1),
+            nn.ReLU(),
+            nn.Linear(hidden1, hidden2),
+            nn.ReLU(),
+            nn.Linear(hidden2, out_features),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+def load_xy(sheet: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Lädt X, Y aus Dataprep2.finalrunner(sheet) und konvertiert zu Tensoren.
+
+    - X-Form: (N, 1)  -> Spalte 'change'
+    - Y-Form: (N, 3)  -> ['momentum', 'change_dax', 'change_vdax']
+    """
+    X_df, Y_df = finalrunner(sheet)
+
+    X_t = torch.tensor(X_df.values, dtype=torch.float32)
+    Y_t = torch.tensor(Y_df.values, dtype=torch.float32)
+
+    return X_t, Y_t
+
+
+def train_model(
+    sheet: int = 3,
+    epochs: int = 100,
+    batch_size: int = 32,
+    lr: float = 1e-3,
+    val_split: float = 0.2,
+    model_out: str | Path = "data_output/simple_net.pt",
+) -> dict:
+    """Trainiert ein kleines Netz auf X->Y und speichert Gewichte.
+
+    Rückgabe enthält Metriken der letzten Epoche.
+    """
+    # Daten laden
+    X, Y = load_xy(sheet)
+    n_samples = X.shape[0]
+
+    dataset = TensorDataset(X, Y)
+
+    # Train/Val-Split
+    val_size = int(n_samples * val_split)
+    train_size = n_samples - val_size
+    train_ds, val_ds = random_split(dataset, [train_size, val_size], generator=torch.Generator().manual_seed(42))
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False) if val_size > 0 else None
+
+    # Modell + Optimierer
+    model = SimpleNet(in_features=X.shape[1], out_features=Y.shape[1])
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+    # Training Loop
+    for epoch in range(1, epochs + 1):
+        model.train()
+        running_loss = 0.0
+        for xb, yb in train_loader:
+            optimizer.zero_grad()
+            preds = model(xb)
+            loss = criterion(preds, yb)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * xb.size(0)
+
+        train_loss = running_loss / train_size if train_size > 0 else float("nan")
+
+        # Validation
+        val_loss = None
+        if val_loader is not None:
+            model.eval()
+            val_running = 0.0
+            with torch.no_grad():
+                for xb, yb in val_loader:
+                    preds = model(xb)
+                    loss = criterion(preds, yb)
+                    val_running += loss.item() * xb.size(0)
+            val_loss = val_running / val_size if val_size > 0 else None
+
+        if epoch % max(1, epochs // 10) == 0 or epoch == 1 or epoch == epochs:
+            if val_loss is not None:
+                print(f"Epoch {epoch:4d}/{epochs} - train_loss={train_loss:.6f} - val_loss={val_loss:.6f}")
+            else:
+                print(f"Epoch {epoch:4d}/{epochs} - train_loss={train_loss:.6f}")
+
+    # Modell speichern
+    model_out = Path(model_out)
+    model_out.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({
+        "state_dict": model.state_dict(),
+        "in_features": X.shape[1],
+        "out_features": Y.shape[1],
+        "hidden1": 32,
+        "hidden2": 16,
+        "sheet": sheet,
+    }, model_out)
+
+    metrics = {"train_loss": train_loss, "val_loss": val_loss}
+    print(f"Gespeichert: {model_out} | Metrics: {metrics}")
+    return metrics
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train simples PyTorch-Netz auf X/Y aus Dataprep2")
+    parser.add_argument("--sheet", type=int, default=3, help="Sheet-Index für das Wertpapier (Default: 3)")
+    parser.add_argument("--epochs", type=int, default=100, help="Anzahl Epochen (Default: 100)")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch-Größe (Default: 32)")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Lernrate (Default: 1e-3)")
+    parser.add_argument("--model_out", type=str, default="data_output/simple_net.pt", help="Pfad zum Speichern des Modells")
+
+    args = parser.parse_args()
+    train_model(
+        sheet=args.sheet,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        model_out=args.model_out,
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+Epoch    1/100 - loss=0.815492
+Epoch   10/100 - loss=0.734288
+Epoch   20/100 - loss=0.657205
+Epoch   30/100 - loss=0.591868
+Epoch   40/100 - loss=0.536445
+Epoch   50/100 - loss=0.489389
+Epoch   60/100 - loss=0.449398
+Epoch   70/100 - loss=0.415372
+Epoch   80/100 - loss=0.386383
+Epoch   90/100 - loss=0.361651
+Epoch  100/100 - loss=0.340514
+Gespeichert: data_output\simple_linear.pt
+
+
+Epoch    1/100 - train_loss=0.183793 - val_loss=0.164909
+Epoch   10/100 - train_loss=0.158799 - val_loss=0.161254
+Epoch   20/100 - train_loss=0.158815 - val_loss=0.161107
+Epoch   30/100 - train_loss=0.158856 - val_loss=0.161231
+Epoch   40/100 - train_loss=0.158919 - val_loss=0.161175
+Epoch   50/100 - train_loss=0.158760 - val_loss=0.160912
+Epoch   60/100 - train_loss=0.158745 - val_loss=0.160916
+Epoch   70/100 - train_loss=0.158831 - val_loss=0.161259
+Epoch   80/100 - train_loss=0.158957 - val_loss=0.161081
+Epoch   90/100 - train_loss=0.158879 - val_loss=0.161038
+Epoch  100/100 - train_loss=0.158613 - val_loss=0.161186
+Gespeichert: data_output\simple_net.pt | Metrics: {'train_loss': 0.15861346434109175, 'val_loss': 0.16118619545212004}
