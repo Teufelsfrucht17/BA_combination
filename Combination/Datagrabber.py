@@ -24,30 +24,121 @@ class DataGrabber:
 
     def fetch_all_data(self):
         """
-        Holt sowohl tägliche als auch 30-Min Daten
+        Holt Daten für alle Portfolios (DAX, SDAX) und beide Perioden (daily, intraday)
 
         Returns:
-            Tuple von (daily_data, intraday_data) als DataFrames
+            Dictionary: {portfolio_name: {period_type: DataFrame}}
+            Beispiel: {"dax": {"daily": df, "intraday": df}, "sdax": {...}}
         """
         print("\n" + "="*70)
-        print("DATENABRUF GESTARTET")
+        print("DATENABRUF GESTARTET - PORTFOLIO-BASIERT")
         print("="*70)
 
-        # Tägliche Daten
-        print("\n[1/2] Hole tägliche Daten...")
-        daily_data = self.fetch_period_data("daily")
+        all_data = {}
+        portfolios = self.config.get("data.portfolios", {})
 
-        # 30-Min Daten
-        print("\n[2/2] Hole 30-Minuten Daten...")
-        intraday_data = self.fetch_period_data("intraday")
+        for portfolio_name in portfolios.keys():
+            print(f"\n{'='*70}")
+            print(f"PORTFOLIO: {portfolios[portfolio_name].get('name', portfolio_name.upper())}")
+            print(f"{'='*70}")
+
+            all_data[portfolio_name] = {}
+
+            # Tägliche Daten
+            print(f"\n[1/2] Hole tägliche Daten für {portfolio_name.upper()}...")
+            all_data[portfolio_name]["daily"] = self.fetch_portfolio_data(portfolio_name, "daily")
+
+            # 30-Min Daten
+            print(f"\n[2/2] Hole 30-Minuten Daten für {portfolio_name.upper()}...")
+            all_data[portfolio_name]["intraday"] = self.fetch_portfolio_data(portfolio_name, "intraday")
 
         print("\n" + "="*70)
         print("DATENABRUF ABGESCHLOSSEN")
         print("="*70)
-        print(f"Daily Daten: {daily_data.shape}")
-        print(f"Intraday Daten: {intraday_data.shape}")
 
-        return daily_data, intraday_data
+        # Zeige Zusammenfassung
+        for portfolio_name in all_data:
+            print(f"\n{portfolio_name.upper()}:")
+            print(f"  Daily: {all_data[portfolio_name]['daily'].shape}")
+            print(f"  Intraday: {all_data[portfolio_name]['intraday'].shape}")
+
+        return all_data
+
+    def fetch_portfolio_data(self, portfolio_name: str, period_type: str) -> pd.DataFrame:
+        """
+        Holt Daten für ein bestimmtes Portfolio und eine Periode
+
+        Args:
+            portfolio_name: Name des Portfolios (z.B. "dax", "sdax")
+            period_type: "daily" oder "intraday"
+
+        Returns:
+            DataFrame mit Portfolio-Aktien, Portfolio-Index und gemeinsamen Indizes
+        """
+        portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
+        if portfolio_config is None:
+            raise ValueError(f"Portfolio '{portfolio_name}' nicht in Config gefunden")
+
+        period_config = self.config.get(f"data.periods.{period_type}")
+        if period_config is None:
+            raise ValueError(f"Periode '{period_type}' nicht in Config gefunden")
+
+        # Konvertiere Datum-Strings zu datetime
+        start = datetime.datetime.strptime(period_config["start"], "%Y-%m-%d")
+        end = datetime.datetime.strptime(period_config["end"], "%Y-%m-%d")
+        interval = period_config["interval"]
+
+        print(f"  Zeitraum: {start.date()} bis {end.date()}")
+        print(f"  Interval: {interval}")
+
+        # Portfolio Daten (Aktien)
+        universe = portfolio_config["universe"]
+        print(f"  Hole Portfolio-Daten ({len(universe)} Aktien)...")
+        portfolio_df = LS.getHistoryData(
+            universe=universe,
+            fields=self.config.get("data.fields"),
+            start=start,
+            end=end,
+            interval=interval
+        )
+
+        # Portfolio-spezifischer Index (DAX oder SDAX)
+        portfolio_index = portfolio_config["index"]
+        print(f"  Hole Portfolio-Index ({portfolio_index})...")
+        index_df = LS.getHistoryData(
+            universe=[portfolio_index],
+            fields=["TRDPRC_1"],
+            start=start,
+            end=end,
+            interval=interval
+        )
+
+        # Gemeinsame Indizes (VDAX)
+        common_indices = self.config.get("data.common_indices", [])
+        if len(common_indices) > 0:
+            print(f"  Hole gemeinsame Indizes ({len(common_indices)})...")
+            common_df = LS.getHistoryData(
+                universe=common_indices,
+                fields=["TRDPRC_1"],
+                start=start,
+                end=end,
+                interval=interval
+            )
+            # Kombiniere alle drei
+            combined_df = pd.concat([portfolio_df, index_df, common_df], axis=1)
+        else:
+            # Nur Portfolio + Index
+            combined_df = pd.concat([portfolio_df, index_df], axis=1)
+
+        # Entferne Duplikate in Spaltennamen falls vorhanden
+        combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]
+
+        # Speichere als Excel
+        print(f"  Speichere als Excel...")
+        self.exceltextwriter(combined_df, f"{portfolio_name}_{period_type}")
+
+        print(f"  ✓ {portfolio_name.upper()} {period_type} Daten geladen: {combined_df.shape}")
+        return combined_df
 
     def fetch_period_data(self, period_type: str) -> pd.DataFrame:
         """
@@ -81,7 +172,7 @@ class DataGrabber:
             interval=interval
         )
 
-        # Index Daten (DAX, VDAX)
+        # Index Daten (DAX, SDAX, VDAX)
         print(f"  Hole Index-Daten ({len(self.config.get('data.indices'))} Indizes)...")
         index_df = LS.getHistoryData(
             universe=self.config.get("data.indices"),
