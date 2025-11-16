@@ -135,8 +135,7 @@ def train_pytorch_model(
             optimizer,
             mode='min',
             factor=0.5,
-            patience=max(1, patience // 3),
-            verbose=False
+            patience=max(1, patience // 3)
         )
 
     best_val_loss = float('inf')
@@ -219,7 +218,7 @@ def train_sklearn_nn(
     hidden_layer_sizes=(64, 32),
     max_iter=500,
     use_cv: bool = False,
-    param_grid: dict | None = None,
+    param_grid: dict  = None,
     cv_splits: int = 5,
 ):
     """
