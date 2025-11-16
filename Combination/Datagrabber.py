@@ -81,7 +81,7 @@ class DataGrabber:
             interval=interval
         )
 
-        # Index Daten (DAX, VDAX)
+        # Index Daten (DAX, SDAX, VDAX)
         print(f"  Hole Index-Daten ({len(self.config.get('data.indices'))} Indizes)...")
         index_df = LS.getHistoryData(
             universe=self.config.get("data.indices"),

@@ -86,10 +86,10 @@ class DataPrep:
             features[f'momentum_{period}'] = portfolio_prices.pct_change(period)
 
         # ==========================================
-        # Index Features (DAX, VDAX)
+        # Index Features (DAX, SDAX, VDAX)
         # ==========================================
 
-        # DAX Change
+        # DAX Change (Large Cap Index)
         dax_columns = [col for col in df.columns if 'GDAXI' in col]
         if len(dax_columns) > 0:
             dax_prices = df[dax_columns[0]]
@@ -97,7 +97,16 @@ class DataPrep:
         else:
             features['change_dax'] = 0.0
 
-        # VDAX Absolute
+        # SDAX Change (Small Cap Index)
+        sdax_columns = [col for col in df.columns if 'SDAXI' in col or 'SDAX' in col]
+        if len(sdax_columns) > 0:
+            sdax_prices = df[sdax_columns[0]]
+            features['change_sdax'] = sdax_prices.pct_change()
+        else:
+            # Fallback wenn SDAX nicht verfügbar
+            features['change_sdax'] = 0.0
+
+        # VDAX Absolute (Volatilität)
         vdax_columns = [col for col in df.columns if 'V1XI' in col]
         if len(vdax_columns) > 0:
             features['vdax_absolute'] = df[vdax_columns[0]].abs()
@@ -189,7 +198,7 @@ class DataPrep:
         return X, y
 
 
-def time_series_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2):
+def time_series_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2, min_train_size: int = 50, min_test_size: int = 10):
     """
     Chronologischer Split: frühe Daten -> Training, späte -> Test
 
@@ -197,20 +206,49 @@ def time_series_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2):
         X: Features
         y: Target
         test_size: Anteil für Test-Set (Standard: 0.2)
+        min_train_size: Minimale Anzahl Samples im Trainingsset
+        min_test_size: Minimale Anzahl Samples im Testset
 
     Returns:
         Tuple von (X_train, X_test, y_train, y_test)
+
+    Raises:
+        ValueError: Wenn nicht genügend Samples für sinnvollen Split vorhanden
     """
     n_samples = len(X)
+
+    # Prüfe ob überhaupt Daten vorhanden
     if n_samples == 0:
         raise ValueError("Keine Datenpunkte vorhanden.")
 
+    # Berechne Split-Index
     split_idx = int(n_samples * (1 - test_size))
+    n_train = split_idx
+    n_test = n_samples - split_idx
 
+    # Validiere Split-Größen
+    if n_train < min_train_size:
+        raise ValueError(
+            f"Trainingsset zu klein: {n_train} Samples (Minimum: {min_train_size}). "
+            f"Bitte reduziere test_size oder erhöhe die Datenmenge."
+        )
+
+    if n_test < min_test_size:
+        raise ValueError(
+            f"Testset zu klein: {n_test} Samples (Minimum: {min_test_size}). "
+            f"Bitte erhöhe test_size oder erhöhe die Datenmenge."
+        )
+
+    # Durchführe Split
     X_train = X.iloc[:split_idx]
     X_test = X.iloc[split_idx:]
     y_train = y.iloc[:split_idx]
     y_test = y.iloc[split_idx:]
+
+    # Warne bei sehr kleinen Datasets
+    if n_samples < 100:
+        print(f"⚠️  Warnung: Sehr kleiner Datensatz ({n_samples} Samples). "
+              f"Ergebnisse könnten nicht aussagekräftig sein.")
 
     return X_train, X_test, y_train, y_test
 

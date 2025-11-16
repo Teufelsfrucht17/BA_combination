@@ -10,8 +10,9 @@ data:
     - DEZG.DE
 
   indices:
-    - ".GDAXI"  # DAX Index
-    - ".V1XI"   # VDAX Index
+    - ".GDAXI"  # DAX Index (deutscher Leitindex)
+    - ".SDAXI"  # SDAX Index (Small Cap DAX)
+    - ".V1XI"   # VDAX Index (Volatilitätsindex)
 
   fields:
     - "OPEN_PRC"
@@ -36,7 +37,8 @@ features:
   input_features:
     - momentum_5     # 5-Perioden Momentum
     - momentum_10    # 10-Perioden Momentum
-    - change_dax     # DAX Änderung
+    - change_dax     # DAX Änderung (Large Cap)
+    - change_sdax    # SDAX Änderung (Small Cap)
     - vdax_absolute  # VDAX absoluter Wert
     - volume_ratio   # Volume Verhältnis
 

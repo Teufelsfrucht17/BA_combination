@@ -20,7 +20,8 @@ from Models_Wrapper import (
     train_sklearn_nn,
     train_ols,
     train_ridge,
-    train_random_forest
+    train_random_forest,
+    train_naive_baseline
 )
 
 
@@ -65,10 +66,15 @@ class ModelComparison:
             test_split = self.config.get("training.test_split", 0.2)
             X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
 
-            # Skaliere nur auf Basis des Trainingssets, um Data Leakage zu vermeiden
+            # ========================================
+            # WICHTIG: Zentrale Skalierung hier!
+            # ========================================
+            # Scaler wird NUR auf X_train gefittet, dann auf beide Sets angewendet.
+            # Dies verhindert Data Leakage (Test-Daten beeinflussen nicht das Training).
+            # Alle Modelle erhalten bereits skalierte Daten!
             scaler_method = self.config.get("training.scaling.method", "StandardScaler")
             scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
-            scaler.fit(X_train)
+            scaler.fit(X_train)  # Fit nur auf Trainingsset!
 
             X_train = pd.DataFrame(
                 scaler.transform(X_train),
@@ -110,6 +116,36 @@ class ModelComparison:
         print(f"[SCHRITT 3/4] MODELL-TRAINING ({period_type.upper()})")
 
         # =============================================
+        # Baseline Model (Naive Predictor)
+        # =============================================
+        print(f"\n{'─'*60}")
+        print("Baseline Model (Naive Predictor)")
+        print(f"{'─'*60}")
+
+        start = time.time()
+
+        try:
+            model, metrics = train_naive_baseline(X_train, y_train, X_test, y_test)
+
+            training_time = time.time() - start
+
+            results["naive_baseline"] = {
+                "model": model,
+                "metrics": metrics,
+                "training_time": training_time
+            }
+
+            print(f"  ✓ R² Test: {metrics['r2']:.4f}")
+            print(f"  ✓ MSE: {metrics['mse']:.6f}")
+            print(f"  ✓ MAE: {metrics['mae']:.6f}")
+            print(f"  ✓ Training Zeit: {training_time:.2f}s")
+            print("  ℹ️  Baseline dient als Vergleichsmaßstab (sollte von ML-Modellen übertroffen werden)")
+
+        except Exception as e:
+            print(f"  ✗ Fehler: {e}")
+            results["naive_baseline"] = None
+
+        # =============================================
         # PyTorch Neural Network
         # =============================================
         if self.config.get("models.pytorch_nn.enabled"):
@@ -126,7 +162,10 @@ class ModelComparison:
                     hidden2=self.config.get("models.pytorch_nn.hidden2", 32),
                     epochs=self.config.get("models.pytorch_nn.epochs", 200),
                     batch_size=self.config.get("models.pytorch_nn.batch_size", 64),
-                    lr=self.config.get("models.pytorch_nn.learning_rate", 0.001)
+                    lr=self.config.get("models.pytorch_nn.learning_rate", 0.001),
+                    validation_split=self.config.get("models.pytorch_nn.validation_split", 0.2),
+                    early_stopping_patience=20,
+                    use_scheduler=True
                 )
 
                 training_time = time.time() - start
@@ -160,7 +199,9 @@ class ModelComparison:
                 model, metrics = train_sklearn_nn(
                     X_train, y_train, X_test, y_test,
                     hidden_layer_sizes=tuple(self.config.get("models.sklearn_nn.hidden_layer_sizes", [64, 32])),
-                    max_iter=self.config.get("models.sklearn_nn.max_iter", 500)
+                    max_iter=self.config.get("models.sklearn_nn.max_iter", 500),
+                    n_splits=self.config.get("training.cross_validation.n_splits", 5),
+                    use_gridsearch=self.config.get("training.cross_validation.enabled", True)
                 )
 
                 training_time = time.time() - start
@@ -259,7 +300,9 @@ class ModelComparison:
                     X_train, y_train, X_test, y_test,
                     n_estimators=self.config.get("models.random_forest.n_estimators", 300),
                     max_depth=self.config.get("models.random_forest.max_depth", 10),
-                    min_samples_split=self.config.get("models.random_forest.min_samples_split", 5)
+                    min_samples_split=self.config.get("models.random_forest.min_samples_split", 5),
+                    n_splits=self.config.get("training.cross_validation.n_splits", 5),
+                    use_gridsearch=self.config.get("training.cross_validation.enabled", True)
                 )
 
                 training_time = time.time() - start
