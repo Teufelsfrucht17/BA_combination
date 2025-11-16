@@ -1,18 +1,35 @@
 # config.yaml - Zentrale Konfiguration für BA_combination Unified Version
 
 data:
-  universe:
-    - RHMG.DE
-    - ENR1n.DE
-    - TKAG.DE
-    - FTKn.DE
-    - ACT1.DE
-    - DEZG.DE
+  # Portfolio-Definitionen (jedes Portfolio hat eigenes Universe und Index)
+  portfolios:
+    dax:
+      name: "DAX Portfolio"
+      universe:
+        - RHMG.DE
+        - ENR1n.DE
+        - TKAG.DE
+        - FTKn.DE
+        - ACT1.DE
+        - DEZG.DE
+      index: ".GDAXI"  # DAX Index (Large Cap)
+      index_feature: "change_dax"
 
-  indices:
-    - ".GDAXI"  # DAX Index (deutscher Leitindex)
-    - ".SDAXI"  # SDAX Index (Small Cap DAX)
-    - ".V1XI"   # VDAX Index (Volatilitätsindex)
+    sdax:
+      name: "SDAX Portfolio"
+      universe:
+        - 1U1.DE
+        - ADNGk.DE
+        - AOFG.DE
+        - COKG.DE
+        - CWCG.DE
+        - DMPG.DE
+      index: ".SDAXI"  # SDAX Index (Small Cap)
+      index_feature: "change_sdax"
+
+  # Gemeinsame Indizes für alle Portfolios (z.B. Volatilität)
+  common_indices:
+    - ".V1XI"  # VDAX Index (Volatilitätsindex)
 
   fields:
     - "OPEN_PRC"
@@ -34,11 +51,11 @@ data:
 
 features:
   # X-Variablen (anpassbar)
+  # Hinweis: change_dax oder change_sdax wird automatisch basierend auf Portfolio verwendet
   input_features:
     - momentum_5     # 5-Perioden Momentum
     - momentum_10    # 10-Perioden Momentum
-    - change_dax     # DAX Änderung (Large Cap)
-    - change_sdax    # SDAX Änderung (Small Cap)
+    - portfolio_index_change  # Wird zu change_dax oder change_sdax je nach Portfolio
     - vdax_absolute  # VDAX absoluter Wert
     - volume_ratio   # Volume Verhältnis
 

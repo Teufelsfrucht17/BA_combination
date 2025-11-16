@@ -1,6 +1,150 @@
 # Changelog - BA Trading System Verbesserungen
 
-## [2025-11-16] - Data Leakage Fix & ML Improvements
+## [2025-11-16 Part 2] - Portfolio-basiertes System (DAX + SDAX)
+
+### 🎯 Hauptänderung: Separate Portfolios statt kombinierte Features
+
+**Vorher:** Ein Portfolio mit DAX und SDAX als Features zusammen
+**Jetzt:** Zwei separate Portfolios - jedes mit seinem eigenen Index
+
+**Neue Portfolios:**
+- **DAX Portfolio:** 6 Large-Cap Aktien + DAX Index (.GDAXI)
+- **SDAX Portfolio:** 6 Small-Cap Aktien + SDAX Index (.SDAXI)
+
+Jedes Portfolio wird separat für Daily & Intraday trainiert.
+
+### 📝 Config-Struktur (`config.yaml`)
+
+**Neue Portfolio-Definition:**
+```yaml
+data:
+  portfolios:
+    dax:
+      name: "DAX Portfolio"
+      universe: [RHMG.DE, ENR1n.DE, TKAG.DE, FTKn.DE, ACT1.DE, DEZG.DE]
+      index: ".GDAXI"
+      index_feature: "change_dax"
+
+    sdax:
+      name: "SDAX Portfolio"
+      universe: [1U1.DE, ADNGk.DE, AOFG.DE, COKG.DE, CWCG.DE, DMPG.DE]
+      index: ".SDAXI"
+      index_feature: "change_sdax"
+
+  common_indices:
+    - ".V1XI"  # VDAX für alle Portfolios
+```
+
+**Feature-Anpassung:**
+- `portfolio_index_change` ersetzt `change_dax`/`change_sdax` in Config
+- Wird automatisch zum richtigen Index-Feature gemapped
+
+### 🔄 DataGrabber Portfolio-basiert (`Datagrabber.py`)
+
+**Neue Methoden:**
+- `fetch_all_data()`: Gibt Dictionary zurück `{portfolio: {period: DataFrame}}`
+- `fetch_portfolio_data(portfolio_name, period_type)`: Lädt Portfolio + Index + gemeinsame Indizes
+
+**Struktur:**
+```python
+all_data = {
+    "dax": {
+        "daily": DataFrame,
+        "intraday": DataFrame
+    },
+    "sdax": {
+        "daily": DataFrame,
+        "intraday": DataFrame
+    }
+}
+```
+
+### ⚙️ Dataprep Portfolio-spezifisch (`Dataprep.py`)
+
+**Neue Parameter:**
+- `prepare_data(df, portfolio_name, period_type)`: Erkennt Portfolio für korrektes Index-Feature
+- `create_features(df, portfolio_name)`: Erstellt Portfolio-spezifische Features
+
+**Automatisches Feature-Mapping:**
+- DAX Portfolio: `portfolio_index_change` → `change_dax`
+- SDAX Portfolio: `portfolio_index_change` → `change_sdax`
+- Beide haben auch den spezifischen Feature-Namen als Alias
+
+### 📊 ModelComparison Multi-Portfolio (`ModelComparison.py`)
+
+**Neue Loop-Struktur:**
+```python
+for portfolio_name, portfolio_data in all_data.items():
+    for period_type, data in portfolio_data.items():
+        # Train models
+        results_key = f"{portfolio_name}_{period_type}"  # z.B. "dax_daily"
+        self.results[results_key] = self.train_all_models(...)
+```
+
+**Ergebnis-Keys:**
+- `dax_daily`
+- `dax_intraday`
+- `sdax_daily`
+- `sdax_intraday`
+
+### 📈 Comparison Report erweitert
+
+**Neue Excel-Sheets:**
+1. **Full_Comparison:** Portfolio + Period + Model + Metriken
+2. **R2_by_Portfolio_Period:** Pivot mit Portfolio_Period als Spalten
+3. **MSE_by_Portfolio_Period:** MSE Pivot
+4. **R2_Hierarchical:** Hierarchische Pivot-Tabelle (Portfolio → Period)
+
+**Konsolen-Ausgabe:**
+```
+📊 Beste Modelle nach R² Score:
+
+DAX Portfolio - DAILY:
+  🏆 Bestes Modell: random_forest
+  📈 R² Test Score: 0.1234
+
+SDAX Portfolio - DAILY:
+  🏆 Bestes Modell: pytorch_nn
+  📈 R² Test Score: 0.2345
+```
+
+### 💾 Modell-Speicherung
+
+**Neue Ordnerstruktur:**
+```
+Models/
+├── dax_daily/
+│   ├── pytorch_nn.pt
+│   ├── sklearn_nn.pkl
+│   ├── ridge.pkl
+│   └── random_forest.pkl
+├── dax_intraday/
+│   └── ...
+├── sdax_daily/
+│   └── ...
+└── sdax_intraday/
+    └── ...
+```
+
+### ✅ Zusammenfassung
+
+**Was wurde geändert:**
+- ✅ Portfolio-basierte Config-Struktur
+- ✅ Separate Datenabruf für DAX und SDAX
+- ✅ Portfolio-spezifische Feature-Generierung
+- ✅ Multi-Portfolio Training-Loop
+- ✅ Erweiterte Vergleichstabellen
+- ✅ Portfolio-basierte Modell-Speicherung
+
+**Resultat:**
+- 🎯 Klare Trennung: DAX vs SDAX
+- 📊 4 separate Trainings-Durchläufe (2 Portfolios × 2 Perioden)
+- 📈 Vergleichbarkeit: Large Cap vs Small Cap Performance
+- 🔍 Jedes Portfolio mit seinem optimalen Index als Feature
+
+---
+
+## [2025-11-16 Part 1] - Data Leakage Fix & ML Improvements
 
 ### 🔒 Data Leakage Behebung
 
