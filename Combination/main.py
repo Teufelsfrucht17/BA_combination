@@ -137,7 +137,12 @@ Features in Config:
     print("="*70)
     print(f"Config-Datei:     {args.config}")
     print(f"Modus:            {args.mode}")
-    print(f"Portfolio Größe:  {len(config.get('data.universe'))} Aktien")
+
+    # Berechne Portfolio-Größe (alle Aktien aus allen Portfolios)
+    portfolios = config.get('data.portfolios', {})
+    total_stocks = sum(len(p.get('universe', [])) for p in portfolios.values())
+    print(f"Portfolios:       {', '.join(portfolios.keys())}")
+    print(f"Portfolio Größe:  {total_stocks} Aktien")
     print(f"Features:         {config.get('features.input_features')}")
 
     enabled_models = [m for m in ['pytorch_nn', 'sklearn_nn', 'ols', 'ridge', 'random_forest']

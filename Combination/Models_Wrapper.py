@@ -111,7 +111,7 @@ def train_pytorch_model(X_train, y_train, X_test, y_test,
     scheduler = None
     if use_scheduler:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=10, verbose=False
+            optimizer, mode='min', factor=0.5, patience=10
         )
 
     # Early Stopping
@@ -195,7 +195,7 @@ def train_pytorch_model(X_train, y_train, X_test, y_test,
 # ============================================
 
 def train_sklearn_nn(X_train, y_train, X_test, y_test,
-                     hidden_layer_sizes=(64, 32), max_iter=500,
+                     hidden_layer_sizes=(64, 32), max_iter=1000,
                      n_splits=5, use_gridsearch=True):
     """
     Trainiert Sklearn MLP Regressor mit optionalem Hyperparameter-Tuning

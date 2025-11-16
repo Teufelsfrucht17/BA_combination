@@ -54,10 +54,10 @@ features:
   # Hinweis: change_dax oder change_sdax wird automatisch basierend auf Portfolio verwendet
   input_features:
     - momentum_5     # 5-Perioden Momentum
-    - momentum_10    # 10-Perioden Momentum
-    - portfolio_index_change  # Wird zu change_dax oder change_sdax je nach Portfolio
-    - vdax_absolute  # VDAX absoluter Wert
-    - volume_ratio   # Volume Verhältnis
+ #   - momentum_10    # 10-Perioden Momentum
+  #  - portfolio_index_change  # Wird zu change_dax oder change_sdax je nach Portfolio
+   # - vdax_absolute  # VDAX absoluter Wert
+   # - volume_ratio   # Volume Verhältnis
 
   # Y-Variable (Ziel)
   target: "price_change_next"
@@ -80,7 +80,7 @@ models:
   sklearn_nn:
     enabled: true
     hidden_layer_sizes: [64, 32]
-    max_iter: 500
+    max_iter: 1000
 
   ols:
     enabled: true
