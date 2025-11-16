@@ -10,8 +10,9 @@ data:
     - DEZG.DE
 
   indices:
-    - ".GDAXI"  # DAX Index
-    - ".V1XI"   # VDAX Index
+    dax: ".GDAXI"    # DAX Index
+    sdax: ".SDAXI"   # SDAX Index
+    vdax: ".V1XI"    # VDAX (Volatilitätsindex)
 
   fields:
     - "OPEN_PRC"
@@ -37,6 +38,7 @@ features:
     - momentum_5     # 5-Perioden Momentum
     - momentum_10    # 10-Perioden Momentum
     - change_dax     # DAX Änderung
+    - change_sdax    # SDAX Änderung
     - vdax_absolute  # VDAX absoluter Wert
     - volume_ratio   # Volume Verhältnis
 
@@ -57,11 +59,20 @@ models:
     batch_size: 64
     learning_rate: 0.001
     validation_split: 0.2
+    patience: 25
+    early_stopping_min_delta: 0.0001
 
   sklearn_nn:
     enabled: true
     hidden_layer_sizes: [64, 32]
     max_iter: 500
+    hyperparameter_search: true
+    hyperparameter_grid:
+      mlp__hidden_layer_sizes:
+        - [64, 32]
+        - [128, 64]
+      mlp__alpha: [0.0001, 0.001]
+      mlp__learning_rate_init: [0.0005, 0.001]
 
   ols:
     enabled: true
@@ -75,6 +86,15 @@ models:
     n_estimators: 300
     max_depth: 10
     min_samples_split: 5
+    min_samples_leaf: 1
+    max_features: "sqrt"
+    hyperparameter_search: true
+    param_grid:
+      n_estimators: [200, 400, 600]
+      max_depth: [6, 10, 14]
+      min_samples_split: [2, 5, 10]
+      min_samples_leaf: [1, 2, 4]
+      max_features: ["sqrt", "log2", null]
 
 training:
   test_split: 0.2

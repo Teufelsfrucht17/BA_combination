@@ -81,10 +81,11 @@ class DataGrabber:
             interval=interval
         )
 
-        # Index Daten (DAX, VDAX)
-        print(f"  Hole Index-Daten ({len(self.config.get('data.indices'))} Indizes)...")
+        # Index Daten (DAX, SDAX, VDAX)
+        indices_universe = self._resolve_indices()
+        print(f"  Hole Index-Daten ({len(indices_universe)} Indizes)...")
         index_df = LS.getHistoryData(
-            universe=self.config.get("data.indices"),
+            universe=indices_universe,
             fields=["TRDPRC_1"],  # Nur Preis für Indizes
             start=start,
             end=end,
@@ -101,6 +102,13 @@ class DataGrabber:
 
         print(f"  ✓ {period_type.capitalize()} Daten erfolgreich geladen: {combined_df.shape}")
         return combined_df
+
+    def _resolve_indices(self) -> list:
+        """Konvertiert die Index-Konfiguration in eine einfache Liste von RICs."""
+        indices_cfg = self.config.get("data.indices", [])
+        if isinstance(indices_cfg, dict):
+            return list(indices_cfg.values())
+        return indices_cfg
 
     def combine_data(self, portfolio_df: pd.DataFrame, index_df: pd.DataFrame) -> pd.DataFrame:
         """

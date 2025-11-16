@@ -8,8 +8,8 @@ import numpy as np
 import time
 import joblib
 from pathlib import Path
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 
 # Import eigener Module
 from Datagrabber import DataGrabber
@@ -65,49 +65,82 @@ class ModelComparison:
             test_split = self.config.get("training.test_split", 0.2)
             X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
 
+            X_train_unscaled = X_train.copy()
+            X_test_unscaled = X_test.copy()
+
             # Skaliere nur auf Basis des Trainingssets, um Data Leakage zu vermeiden
             scaler_method = self.config.get("training.scaling.method", "StandardScaler")
-            scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
-            scaler.fit(X_train)
+            scaler = None
+            if scaler_method:
+                scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
+                scaler.fit(X_train_unscaled)
+                print(f"Skalierung: {scaler.__class__.__name__} (fit nur auf Train-Set)")
 
-            X_train = pd.DataFrame(
-                scaler.transform(X_train),
-                columns=X_train.columns,
-                index=X_train.index
-            )
-            X_test = pd.DataFrame(
-                scaler.transform(X_test),
-                columns=X_test.columns,
-                index=X_test.index
-            )
+                X_train = pd.DataFrame(
+                    scaler.transform(X_train_unscaled),
+                    columns=X_train.columns,
+                    index=X_train.index
+                )
+                X_test = pd.DataFrame(
+                    scaler.transform(X_test_unscaled),
+                    columns=X_test.columns,
+                    index=X_test.index
+                )
+            else:
+                X_train = X_train_unscaled
+                X_test = X_test_unscaled
 
             print(f"\nTrain Size: {len(X_train)} samples")
             print(f"Test Size: {len(X_test)} samples")
 
             # Trainiere alle Modelle
             self.results[period_type] = self.train_all_models(
-                X_train, X_test, y_train, y_test, period_type
+                X_train, X_test, y_train, y_test, period_type,
+                X_train_unscaled=X_train_unscaled,
+                X_test_unscaled=X_test_unscaled
             )
 
         # 3. Vergleich erstellen
         print("\n[SCHRITT 4/4] ERSTELLE VERGLEICHSBERICHT")
         self.create_comparison_report()
 
-    def train_all_models(self, X_train, X_test, y_train, y_test, period_type: str) -> dict:
-        """
-        Trainiert alle aktivierten Modelle
+    def train_all_models(
+        self,
+        X_train,
+        X_test,
+        y_train,
+        y_test,
+        period_type: str,
+        X_train_unscaled=None,
+        X_test_unscaled=None
+    ) -> dict:
+        """Trainiert alle aktivierten Modelle und liefert die Metriken."""
 
-        Args:
-            X_train, X_test, y_train, y_test: Train/Test Splits
-            period_type: "daily" oder "intraday"
-
-        Returns:
-            Dictionary mit Ergebnissen aller Modelle
-        """
         results = {}
+        X_train_unscaled = X_train_unscaled if X_train_unscaled is not None else X_train
+        X_test_unscaled = X_test_unscaled if X_test_unscaled is not None else X_test
+        cv_config = self.config.get("training.cross_validation", {})
+        cv_enabled = cv_config.get("enabled", False)
+        cv_splits = cv_config.get("n_splits", 5)
 
         print(f"\n[SCHRITT 2/4] FEATURE ENGINEERING ABGESCHLOSSEN")
         print(f"[SCHRITT 3/4] MODELL-TRAINING ({period_type.upper()})")
+
+        # =============================================
+        # Naive Baseline
+        # =============================================
+        print(f"\n{'─'*60}")
+        print("Naive Baseline (lag-1)")
+        print(f"{'─'*60}")
+        baseline_metrics = self.compute_naive_baseline(y_train, y_test)
+        results["naive_baseline"] = {
+            "model": None,
+            "metrics": baseline_metrics,
+            "training_time": 0.0
+        }
+        print(f"  ✓ R² Test: {baseline_metrics['r2']:.4f}")
+        print(f"  ✓ MSE: {baseline_metrics['mse']:.6f}")
+        print(f"  ✓ MAE: {baseline_metrics['mae']:.6f}")
 
         # =============================================
         # PyTorch Neural Network
@@ -126,7 +159,10 @@ class ModelComparison:
                     hidden2=self.config.get("models.pytorch_nn.hidden2", 32),
                     epochs=self.config.get("models.pytorch_nn.epochs", 200),
                     batch_size=self.config.get("models.pytorch_nn.batch_size", 64),
-                    lr=self.config.get("models.pytorch_nn.learning_rate", 0.001)
+                    lr=self.config.get("models.pytorch_nn.learning_rate", 0.001),
+                    validation_split=self.config.get("models.pytorch_nn.validation_split", 0.2),
+                    patience=self.config.get("models.pytorch_nn.patience", 25),
+                    min_delta=self.config.get("models.pytorch_nn.early_stopping_min_delta", 1e-4)
                 )
 
                 training_time = time.time() - start
@@ -140,6 +176,9 @@ class ModelComparison:
                 print(f"  ✓ R² Test: {metrics['r2']:.4f}")
                 print(f"  ✓ MSE: {metrics['mse']:.6f}")
                 print(f"  ✓ MAE: {metrics['mae']:.6f}")
+                if not np.isnan(metrics.get('best_val_loss', np.nan)):
+                    print(f"  ✓ Bestes Val-Loss: {metrics['best_val_loss']:.6f}")
+                print(f"  ✓ Trainierte Epochen: {metrics.get('trained_epochs')}")
                 print(f"  ✓ Training Zeit: {training_time:.2f}s")
 
             except Exception as e:
@@ -151,16 +190,19 @@ class ModelComparison:
         # =============================================
         if self.config.get("models.sklearn_nn.enabled"):
             print(f"\n{'─'*60}")
-            print("Sklearn Neural Network")
+            print("Sklearn MLP Regressor")
             print(f"{'─'*60}")
 
             start = time.time()
 
             try:
                 model, metrics = train_sklearn_nn(
-                    X_train, y_train, X_test, y_test,
+                    X_train_unscaled, y_train, X_test_unscaled, y_test,
                     hidden_layer_sizes=tuple(self.config.get("models.sklearn_nn.hidden_layer_sizes", [64, 32])),
-                    max_iter=self.config.get("models.sklearn_nn.max_iter", 500)
+                    max_iter=self.config.get("models.sklearn_nn.max_iter", 500),
+                    use_cv=self.config.get("models.sklearn_nn.hyperparameter_search", False) and cv_enabled,
+                    param_grid=self.config.get("models.sklearn_nn.hyperparameter_grid"),
+                    cv_splits=cv_splits
                 )
 
                 training_time = time.time() - start
@@ -174,6 +216,8 @@ class ModelComparison:
                 print(f"  ✓ R² Test: {metrics['r2']:.4f}")
                 print(f"  ✓ MSE: {metrics['mse']:.6f}")
                 print(f"  ✓ MAE: {metrics['mae']:.6f}")
+                if metrics.get('best_params'):
+                    print(f"  ✓ Beste Hyperparameter: {metrics['best_params']}")
                 print(f"  ✓ Training Zeit: {training_time:.2f}s")
 
             except Exception as e:
@@ -223,7 +267,8 @@ class ModelComparison:
             try:
                 model, metrics = train_ridge(
                     X_train, y_train, X_test, y_test,
-                    alpha_values=self.config.get("models.ridge.alpha_values", [0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
+                    alpha_values=self.config.get("models.ridge.alpha_values", [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]),
+                    cv_splits=cv_splits
                 )
 
                 training_time = time.time() - start
@@ -255,11 +300,20 @@ class ModelComparison:
             start = time.time()
 
             try:
+                default_params = {
+                    'n_estimators': self.config.get("models.random_forest.n_estimators", 300),
+                    'max_depth': self.config.get("models.random_forest.max_depth", 10),
+                    'min_samples_split': self.config.get("models.random_forest.min_samples_split", 5),
+                    'min_samples_leaf': self.config.get("models.random_forest.min_samples_leaf", 1),
+                    'max_features': self.config.get("models.random_forest.max_features", 'sqrt')
+                }
+
                 model, metrics = train_random_forest(
                     X_train, y_train, X_test, y_test,
-                    n_estimators=self.config.get("models.random_forest.n_estimators", 300),
-                    max_depth=self.config.get("models.random_forest.max_depth", 10),
-                    min_samples_split=self.config.get("models.random_forest.min_samples_split", 5)
+                    default_params=default_params,
+                    param_grid=self.config.get("models.random_forest.param_grid"),
+                    use_cv=self.config.get("models.random_forest.hyperparameter_search", False) and cv_enabled,
+                    cv_splits=cv_splits
                 )
 
                 training_time = time.time() - start
@@ -273,6 +327,8 @@ class ModelComparison:
                 print(f"  ✓ R² Test: {metrics['r2']:.4f}")
                 print(f"  ✓ MSE: {metrics['mse']:.6f}")
                 print(f"  ✓ MAE: {metrics['mae']:.6f}")
+                if metrics.get('best_params'):
+                    print(f"  ✓ Beste Hyperparameter: {metrics['best_params']}")
                 print(f"  ✓ Training Zeit: {training_time:.2f}s")
 
             except Exception as e:
@@ -353,6 +409,26 @@ class ModelComparison:
         print(f"\n✅ Ergebnisse gespeichert: {output_path}")
         print("="*70 + "\n")
 
+    def compute_naive_baseline(self, y_train: pd.Series, y_test: pd.Series) -> dict:
+        """Berechnet eine simple Lag-1 Baseline für Vergleichszwecke."""
+        if not isinstance(y_train, pd.Series):
+            y_train = pd.Series(y_train)
+        if not isinstance(y_test, pd.Series):
+            y_test = pd.Series(y_test)
+
+        combined = pd.concat([y_train, y_test])
+        baseline = combined.shift(1).loc[y_test.index]
+        if not baseline.empty and not y_train.empty:
+            baseline.iloc[0] = y_train.iloc[-1]
+        baseline = baseline.fillna(0.0)
+
+        metrics = {
+            'r2': r2_score(y_test, baseline),
+            'mse': mean_squared_error(y_test, baseline),
+            'mae': mean_absolute_error(y_test, baseline)
+        }
+        return metrics
+
     def save_models(self):
         """Speichert alle trainierten Modelle"""
         models_path = Path("Models")
@@ -367,6 +443,8 @@ class ModelComparison:
 
             for model_name, model_results in self.results[period].items():
                 if model_results is None:
+                    continue
+                if model_name == "naive_baseline":
                     continue
 
                 model_file = period_path / f"{model_name}.pkl"

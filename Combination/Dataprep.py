@@ -97,6 +97,14 @@ class DataPrep:
         else:
             features['change_dax'] = 0.0
 
+        # SDAX Change (analog zum DAX)
+        sdax_columns = [col for col in df.columns if 'SDAX' in str(col).upper()]
+        if len(sdax_columns) > 0:
+            sdax_prices = df[sdax_columns[0]]
+            features['change_sdax'] = sdax_prices.pct_change()
+        else:
+            features['change_sdax'] = 0.0
+
         # VDAX Absolute
         vdax_columns = [col for col in df.columns if 'V1XI' in col]
         if len(vdax_columns) > 0:
@@ -189,7 +197,8 @@ class DataPrep:
         return X, y
 
 
-def time_series_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2):
+def time_series_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2,
+                      min_train_samples: int = 30, min_test_samples: int = 10):
     """
     Chronologischer Split: frühe Daten -> Training, späte -> Test
 
@@ -201,11 +210,23 @@ def time_series_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2):
     Returns:
         Tuple von (X_train, X_test, y_train, y_test)
     """
+    if not 0 < test_size < 1:
+        raise ValueError("test_size muss zwischen 0 und 1 liegen.")
+
     n_samples = len(X)
     if n_samples == 0:
         raise ValueError("Keine Datenpunkte vorhanden.")
 
     split_idx = int(n_samples * (1 - test_size))
+    if split_idx < min_train_samples:
+        raise ValueError(
+            f"Trainingssplit enthält nur {split_idx} Samples (< {min_train_samples})."
+        )
+
+    if n_samples - split_idx < min_test_samples:
+        raise ValueError(
+            f"Testsplit enthält nur {n_samples - split_idx} Samples (< {min_test_samples})."
+        )
 
     X_train = X.iloc[:split_idx]
     X_test = X.iloc[split_idx:]
