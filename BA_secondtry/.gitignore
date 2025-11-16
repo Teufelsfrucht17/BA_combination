@@ -1,6 +1,0 @@
-__pycache__/
-*.pyc
-artifacts/
-models/
-.env
-.venv/
