@@ -5,6 +5,8 @@ Holt sowohl tägliche als auch 30-Min Daten basierend auf config.yaml
 
 import datetime
 from pathlib import Path
+from typing import Dict, Optional
+
 import pandas as pd
 import LSEG as LS
 from ConfigManager import ConfigManager
@@ -23,38 +25,54 @@ class DataGrabber:
         self.config = ConfigManager(config_path)
 
     def fetch_all_data(self):
-        """
-        Holt sowohl tägliche als auch 30-Min Daten
-
-        Returns:
-            Tuple von (daily_data, intraday_data) als DataFrames
-        """
-        print("\n" + "="*70)
+        """Holt Daten für alle Portfolios und Perioden."""
+        print("\n" + "=" * 70)
         print("DATENABRUF GESTARTET")
-        print("="*70)
+        print("=" * 70)
 
-        # Tägliche Daten
-        print("\n[1/2] Hole tägliche Daten...")
-        daily_data = self.fetch_period_data("daily")
+        portfolio_data = {}
+        portfolios = self._get_portfolio_configs()
 
-        # 30-Min Daten
-        print("\n[2/2] Hole 30-Minuten Daten...")
-        intraday_data = self.fetch_period_data("intraday")
+        for portfolio_key, portfolio_cfg in portfolios.items():
+            portfolio_name = portfolio_cfg["name"]
+            print("\n" + "-" * 70)
+            print(f"PORTFOLIO: {portfolio_name} ({len(portfolio_cfg['universe'])} Assets)")
+            print("-" * 70)
 
-        print("\n" + "="*70)
+            portfolio_data[portfolio_key] = {}
+
+            for idx, period in enumerate(["daily", "intraday"], start=1):
+                print(f"\n[{idx}/2] Hole {period}-Daten für {portfolio_name}...")
+                df = self.fetch_period_data(
+                    period_type=period,
+                    universe=portfolio_cfg["universe"],
+                    indices=portfolio_cfg["indices"],
+                    portfolio_name=portfolio_name,
+                    portfolio_key=portfolio_key
+                )
+                portfolio_data[portfolio_key][period] = df
+
+        print("\n" + "=" * 70)
         print("DATENABRUF ABGESCHLOSSEN")
-        print("="*70)
-        print(f"Daily Daten: {daily_data.shape}")
-        print(f"Intraday Daten: {intraday_data.shape}")
+        print("=" * 70)
 
-        return daily_data, intraday_data
+        for portfolio_key, period_dict in portfolio_data.items():
+            portfolio_name = portfolios[portfolio_key]["name"]
+            for period, df in period_dict.items():
+                print(f"{portfolio_name} – {period}: {df.shape}")
 
-    def fetch_period_data(self, period_type: str) -> pd.DataFrame:
+        return portfolio_data
+
+    def fetch_period_data(self, period_type: str, universe=None, indices=None,
+                          portfolio_name: Optional[str] = None,
+                          portfolio_key: Optional[str] = None) -> pd.DataFrame:
         """
         Holt Daten für eine bestimmte Periode (daily/intraday)
 
         Args:
             period_type: "daily" oder "intraday"
+            universe: Liste an Assets für das Portfolio
+            indices: Liste/Dikt mit Index-RICs
 
         Returns:
             DataFrame mit kombinierten Portfolio- und Index-Daten
@@ -72,9 +90,11 @@ class DataGrabber:
         print(f"  Interval: {interval}")
 
         # Portfolio Daten (Aktien)
-        print(f"  Hole Portfolio-Daten ({len(self.config.get('data.universe'))} Aktien)...")
+        active_universe = universe or self.config.get('data.universe', [])
+        portfolio_label = portfolio_name or "Portfolio"
+        print(f"  Hole Portfolio-Daten ({portfolio_label}, {len(active_universe)} Assets)...")
         portfolio_df = LS.getHistoryData(
-            universe=self.config.get("data.universe"),
+            universe=active_universe,
             fields=self.config.get("data.fields"),
             start=start,
             end=end,
@@ -82,7 +102,7 @@ class DataGrabber:
         )
 
         # Index Daten (DAX, SDAX, VDAX)
-        indices_universe = self._resolve_indices()
+        indices_universe = self._resolve_indices(indices)
         print(f"  Hole Index-Daten ({len(indices_universe)} Indizes)...")
         index_df = LS.getHistoryData(
             universe=indices_universe,
@@ -98,17 +118,40 @@ class DataGrabber:
 
         # Speichere als Excel (wie in Version 1)
         print(f"  Speichere als Excel...")
-        self.exceltextwriter(combined_df, f"combined_{period_type}")
+        postfix = f"{portfolio_key or 'portfolio'}_{period_type}"
+        self.exceltextwriter(combined_df, f"combined_{postfix}")
 
         print(f"  ✓ {period_type.capitalize()} Daten erfolgreich geladen: {combined_df.shape}")
         return combined_df
 
-    def _resolve_indices(self) -> list:
+    def _resolve_indices(self, indices_cfg=None) -> list:
         """Konvertiert die Index-Konfiguration in eine einfache Liste von RICs."""
-        indices_cfg = self.config.get("data.indices", [])
+        if indices_cfg is None:
+            indices_cfg = self.config.get("data.indices", [])
         if isinstance(indices_cfg, dict):
             return list(indices_cfg.values())
-        return indices_cfg
+        return list(indices_cfg)
+
+    def _get_portfolio_configs(self) -> Dict[str, dict]:
+        """Liest alle Portfolios aus der Config und normalisiert die Struktur."""
+        portfolios = self.config.get("data.portfolios") or {}
+        if not portfolios:
+            return {
+                "default": {
+                    "name": "Portfolio",
+                    "universe": self.config.get("data.universe", []),
+                    "indices": self._resolve_indices()
+                }
+            }
+
+        normalized = {}
+        for key, cfg in portfolios.items():
+            normalized[key] = {
+                "name": cfg.get("name", key.upper()),
+                "universe": cfg.get("universe", []),
+                "indices": self._resolve_indices(cfg.get("indices"))
+            }
+        return normalized
 
     def combine_data(self, portfolio_df: pd.DataFrame, index_df: pd.DataFrame) -> pd.DataFrame:
         """

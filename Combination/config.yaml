@@ -1,6 +1,36 @@
 # config.yaml - Zentrale Konfiguration für BA_combination Unified Version
 
 data:
+  portfolios:
+    dax:
+      name: "DAX"
+      universe:
+        - RHMG.DE
+        - ENR1n.DE
+        - TKAG.DE
+        - FTKn.DE
+        - ACT1.DE
+        - DEZG.DE
+      indices:
+        dax: ".GDAXI"
+        sdax: ".SDAXI"
+        vdax: ".V1XI"
+
+    sdax:
+      name: "SDAX"
+      universe:
+        - 1U1.DE
+        - ADNGk.DE
+        - AOFG.DE
+        - COKG.DE
+        - CWCG.DE
+        - DMPG.DE
+      indices:
+        dax: ".GDAXI"
+        sdax: ".SDAXI"
+        vdax: ".V1XI"
+
+  # DAX Portfolio bleibt für Rückwärtskompatibilität auf Top-Level
   universe:
     - RHMG.DE
     - ENR1n.DE

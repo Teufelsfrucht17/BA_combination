@@ -3,6 +3,8 @@ ModelComparison.py - Hauptmodul für Modellvergleich
 Trainiert alle Modelle und erstellt detaillierten Vergleichsbericht
 """
 
+from typing import Dict
+
 import pandas as pd
 import numpy as np
 import time
@@ -36,6 +38,7 @@ class ModelComparison:
         """
         self.config = ConfigManager(config_path)
         self.results = {}
+        self.portfolios = self._get_portfolio_configs()
 
     def run_full_comparison(self):
         """Führt kompletten Vergleich durch: Daily vs 30min, alle Modelle"""
@@ -47,58 +50,70 @@ class ModelComparison:
         # 1. Daten holen
         print("\n[SCHRITT 1/4] DATENABRUF")
         grabber = DataGrabber(self.config.path)
-        daily_data, intraday_data = grabber.fetch_all_data()
+        data_by_portfolio = grabber.fetch_all_data()
 
         # 2. Dataprep
         prep = DataPrep(self.config.path)
 
-        # Für beide Zeitperioden
-        for period_type, data in [("daily", daily_data), ("intraday", intraday_data)]:
-            print("\n" + "="*70)
-            print(f"TRAINING MIT {period_type.upper()} DATEN")
-            print("="*70)
+        for portfolio_key, period_dict in data_by_portfolio.items():
+            portfolio_name = self.portfolios.get(portfolio_key, {}).get("name", portfolio_key.upper())
+            print("\n" + "#" * 70)
+            print(f"PORTFOLIO TRAINING: {portfolio_name}")
+            print("#" * 70)
 
-            # Prepare data
-            X, y = prep.prepare_data(data, period_type)
+            for period_type in ["daily", "intraday"]:
+                data = period_dict.get(period_type)
+                if data is None or data.empty:
+                    print(f"⚠️ Keine {period_type}-Daten für {portfolio_name} gefunden – überspringe.")
+                    continue
 
-            # Train-Test Split (chronologisch, kein Shuffle!)
-            test_split = self.config.get("training.test_split", 0.2)
-            X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
+                print("\n" + "=" * 70)
+                print(f"TRAINING MIT {period_type.upper()} DATEN ({portfolio_name})")
+                print("=" * 70)
 
-            X_train_unscaled = X_train.copy()
-            X_test_unscaled = X_test.copy()
+                # Prepare data
+                X, y = prep.prepare_data(data, period_type)
 
-            # Skaliere nur auf Basis des Trainingssets, um Data Leakage zu vermeiden
-            scaler_method = self.config.get("training.scaling.method", "StandardScaler")
-            scaler = None
-            if scaler_method:
-                scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
-                scaler.fit(X_train_unscaled)
-                print(f"Skalierung: {scaler.__class__.__name__} (fit nur auf Train-Set)")
+                # Train-Test Split (chronologisch, kein Shuffle!)
+                test_split = self.config.get("training.test_split", 0.2)
+                X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
 
-                X_train = pd.DataFrame(
-                    scaler.transform(X_train_unscaled),
-                    columns=X_train.columns,
-                    index=X_train.index
+                X_train_unscaled = X_train.copy()
+                X_test_unscaled = X_test.copy()
+
+                # Skaliere nur auf Basis des Trainingssets, um Data Leakage zu vermeiden
+                scaler_method = self.config.get("training.scaling.method", "StandardScaler")
+                scaler = None
+                if scaler_method:
+                    scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
+                    scaler.fit(X_train_unscaled)
+                    print(f"Skalierung: {scaler.__class__.__name__} (fit nur auf Train-Set)")
+
+                    X_train = pd.DataFrame(
+                        scaler.transform(X_train_unscaled),
+                        columns=X_train.columns,
+                        index=X_train.index
+                    )
+                    X_test = pd.DataFrame(
+                        scaler.transform(X_test_unscaled),
+                        columns=X_test.columns,
+                        index=X_test.index
+                    )
+                else:
+                    X_train = X_train_unscaled
+                    X_test = X_test_unscaled
+
+                print(f"\nTrain Size: {len(X_train)} samples")
+                print(f"Test Size: {len(X_test)} samples")
+
+                portfolio_results = self.train_all_models(
+                    X_train, X_test, y_train, y_test, period_type,
+                    portfolio_name=portfolio_name,
+                    X_train_unscaled=X_train_unscaled,
+                    X_test_unscaled=X_test_unscaled
                 )
-                X_test = pd.DataFrame(
-                    scaler.transform(X_test_unscaled),
-                    columns=X_test.columns,
-                    index=X_test.index
-                )
-            else:
-                X_train = X_train_unscaled
-                X_test = X_test_unscaled
 
-            print(f"\nTrain Size: {len(X_train)} samples")
-            print(f"Test Size: {len(X_test)} samples")
-
-            # Trainiere alle Modelle
-            self.results[period_type] = self.train_all_models(
-                X_train, X_test, y_train, y_test, period_type,
-                X_train_unscaled=X_train_unscaled,
-                X_test_unscaled=X_test_unscaled
-            )
+                self.results.setdefault(portfolio_key, {})[period_type] = portfolio_results
 
         # 3. Vergleich erstellen
         print("\n[SCHRITT 4/4] ERSTELLE VERGLEICHSBERICHT")
@@ -111,6 +126,7 @@ class ModelComparison:
         y_train,
         y_test,
         period_type: str,
+        portfolio_name: str = "Portfolio",
         X_train_unscaled=None,
         X_test_unscaled=None
     ) -> dict:
@@ -123,8 +139,8 @@ class ModelComparison:
         cv_enabled = cv_config.get("enabled", False)
         cv_splits = cv_config.get("n_splits", 5)
 
-        print(f"\n[SCHRITT 2/4] FEATURE ENGINEERING ABGESCHLOSSEN")
-        print(f"[SCHRITT 3/4] MODELL-TRAINING ({period_type.upper()})")
+        print(f"\n[SCHRITT 2/4] FEATURE ENGINEERING ABGESCHLOSSEN ({portfolio_name})")
+        print(f"[SCHRITT 3/4] MODELL-TRAINING ({period_type.upper()} – {portfolio_name})")
 
         # =============================================
         # Naive Baseline
@@ -343,23 +359,26 @@ class ModelComparison:
         # Sammle alle Metriken
         comparison_data = []
 
-        for period in ["daily", "intraday"]:
-            if period not in self.results:
-                continue
-
-            for model_name, model_results in self.results[period].items():
-                if model_results is None:
+        for portfolio_key, period_dict in self.results.items():
+            portfolio_name = self.portfolios.get(portfolio_key, {}).get("name", portfolio_key.upper())
+            for period, models in period_dict.items():
+                if models is None:
                     continue
 
-                comparison_data.append({
-                    "Period": period,
-                    "Model": model_name,
-                    "R2_Test": model_results["metrics"]["r2"],
-                    "R2_Train": model_results["metrics"].get("train_r2", np.nan),
-                    "MSE": model_results["metrics"]["mse"],
-                    "MAE": model_results["metrics"]["mae"],
-                    "Training_Time_s": model_results["training_time"]
-                })
+                for model_name, model_results in models.items():
+                    if model_results is None:
+                        continue
+
+                    comparison_data.append({
+                        "Portfolio": portfolio_name,
+                        "Period": period,
+                        "Model": model_name,
+                        "R2_Test": model_results["metrics"]["r2"],
+                        "R2_Train": model_results["metrics"].get("train_r2", np.nan),
+                        "MSE": model_results["metrics"]["mse"],
+                        "MAE": model_results["metrics"]["mae"],
+                        "Training_Time_s": model_results["training_time"]
+                    })
 
         # Erstelle DataFrame
         df_comparison = pd.DataFrame(comparison_data)
@@ -369,8 +388,8 @@ class ModelComparison:
             return
 
         # Pivot für bessere Übersicht
-        pivot_r2 = df_comparison.pivot(index='Model', columns='Period', values='R2_Test')
-        pivot_mse = df_comparison.pivot(index='Model', columns='Period', values='MSE')
+        pivot_r2 = df_comparison.pivot_table(index=['Portfolio', 'Model'], columns='Period', values='R2_Test')
+        pivot_mse = df_comparison.pivot_table(index=['Portfolio', 'Model'], columns='Period', values='MSE')
 
         # Speichere als Excel
         output_path = Path("Results") / "model_comparison.xlsx"
@@ -387,19 +406,21 @@ class ModelComparison:
         print("\n📊 Beste Modelle nach R² Score:")
         print("─"*70)
 
-        for period in ["daily", "intraday"]:
-            period_data = df_comparison[df_comparison['Period'] == period]
-            if period_data.empty:
-                continue
+        for portfolio_name in df_comparison['Portfolio'].unique():
+            sub_df = df_comparison[df_comparison['Portfolio'] == portfolio_name]
+            for period in ["daily", "intraday"]:
+                period_data = sub_df[sub_df['Period'] == period]
+                if period_data.empty:
+                    continue
 
-            best_idx = period_data['R2_Test'].idxmax()
-            best_model = period_data.loc[best_idx]
+                best_idx = period_data['R2_Test'].idxmax()
+                best_model = period_data.loc[best_idx]
 
-            print(f"\n{period.upper()} Daten:")
-            print(f"  🏆 Bestes Modell: {best_model['Model']}")
-            print(f"  📈 R² Test Score: {best_model['R2_Test']:.4f}")
-            print(f"  📉 MSE: {best_model['MSE']:.6f}")
-            print(f"  ⏱️  Training Zeit: {best_model['Training_Time_s']:.2f}s")
+                print(f"\n{portfolio_name} – {period.upper()} Daten:")
+                print(f"  🏆 Bestes Modell: {best_model['Model']}")
+                print(f"  📈 R² Test Score: {best_model['R2_Test']:.4f}")
+                print(f"  📉 MSE: {best_model['MSE']:.6f}")
+                print(f"  ⏱️  Training Zeit: {best_model['Training_Time_s']:.2f}s")
 
         # Speichere Modelle
         if self.config.get("output.save_models"):
@@ -434,35 +455,56 @@ class ModelComparison:
         models_path = Path("Models")
         models_path.mkdir(exist_ok=True)
 
-        for period in ["daily", "intraday"]:
-            if period not in self.results:
-                continue
-
-            period_path = models_path / period
-            period_path.mkdir(exist_ok=True)
-
-            for model_name, model_results in self.results[period].items():
-                if model_results is None:
-                    continue
-                if model_name == "naive_baseline":
+        for portfolio_key, period_dict in self.results.items():
+            portfolio_name = self.portfolios.get(portfolio_key, {}).get("name", portfolio_key)
+            for period, models in period_dict.items():
+                if models is None:
                     continue
 
-                model_file = period_path / f"{model_name}.pkl"
+                period_path = models_path / portfolio_name / period
+                period_path.mkdir(parents=True, exist_ok=True)
 
-                try:
-                    # Speichere je nach Modelltyp
-                    if model_name == "pytorch_nn":
-                        # PyTorch speichern
-                        import torch
-                        torch.save(model_results["model"], period_path / f"{model_name}.pt")
-                    else:
-                        # Sklearn Modelle speichern
-                        joblib.dump(model_results["model"], model_file)
+                for model_name, model_results in models.items():
+                    if model_results is None or model_name == "naive_baseline":
+                        continue
 
-                    print(f"  ✓ {period}/{model_name} gespeichert")
+                    model_file = period_path / f"{model_name}.pkl"
 
-                except Exception as e:
-                    print(f"  ✗ Fehler beim Speichern von {period}/{model_name}: {e}")
+                    try:
+                        # Speichere je nach Modelltyp
+                        if model_name == "pytorch_nn":
+                            # PyTorch speichern
+                            import torch
+                            torch.save(model_results["model"], period_path / f"{model_name}.pt")
+                        else:
+                            # Sklearn Modelle speichern
+                            joblib.dump(model_results["model"], model_file)
+
+                        print(f"  ✓ {portfolio_name}/{period}/{model_name} gespeichert")
+
+                    except Exception as e:
+                        print(f"  ✗ Fehler beim Speichern von {portfolio_name}/{period}/{model_name}: {e}")
+
+
+    def _get_portfolio_configs(self) -> Dict[str, dict]:
+        portfolios = self.config.get("data.portfolios") or {}
+        if not portfolios:
+            return {
+                "default": {
+                    "name": "Portfolio",
+                    "universe": self.config.get("data.universe", []),
+                    "indices": self.config.get("data.indices", [])
+                }
+            }
+
+        normalized = {}
+        for key, cfg in portfolios.items():
+            normalized[key] = {
+                "name": cfg.get("name", key.upper()),
+                "universe": cfg.get("universe", []),
+                "indices": cfg.get("indices", [])
+            }
+        return normalized
 
 
 if __name__ == "__main__":

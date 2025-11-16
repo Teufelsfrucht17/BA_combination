@@ -137,7 +137,16 @@ Features in Config:
     print("="*70)
     print(f"Config-Datei:     {args.config}")
     print(f"Modus:            {args.mode}")
-    print(f"Portfolio Größe:  {len(config.get('data.universe'))} Aktien")
+
+    portfolios = config.get('data.portfolios') or {}
+    if portfolios:
+        print("Portfolios:")
+        for key, portfolio_cfg in portfolios.items():
+            name = portfolio_cfg.get('name', key.upper())
+            size = len(portfolio_cfg.get('universe', []))
+            print(f"  - {name}: {size} Aktien")
+    else:
+        print(f"Portfolio Größe:  {len(config.get('data.universe'))} Aktien")
     print(f"Features:         {config.get('features.input_features')}")
 
     enabled_models = [m for m in ['pytorch_nn', 'sklearn_nn', 'ols', 'ridge', 'random_forest']
@@ -159,7 +168,13 @@ Features in Config:
         print("\n✅ Erfolgreich abgeschlossen!")
         print(f"📁 Ergebnisse: Results/model_comparison.xlsx")
         if config.get("output.save_models"):
-            print(f"💾 Modelle: Models/daily/ und Models/intraday/")
+            if portfolios:
+                print("💾 Modelle gespeichert unter:")
+                for key, portfolio_cfg in portfolios.items():
+                    name = portfolio_cfg.get('name', key.upper())
+                    print(f"   • Models/{name}/daily/ und Models/{name}/intraday/")
+            else:
+                print(f"💾 Modelle: Models/Portfolio/daily/ und Models/Portfolio/intraday/")
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Abgebrochen durch Benutzer.")
