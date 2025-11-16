@@ -7,7 +7,7 @@ from IPython.display import display, clear_output
 import GloablVariableStorage
 
 
-def getHistoryData(universe : list[str], fields: list[str] | None , start :datetime.datetime , end : datetime.datetime, interval : str) -> pd.DataFrame:
+def getHistoryData(universe : list[str], fields: list[str] , start :datetime.datetime , end : datetime.datetime, interval : str) -> pd.DataFrame:
     ld.open_session()
 
     df = ld.get_history(

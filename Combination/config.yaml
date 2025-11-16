@@ -2,16 +2,12 @@
 
 data:
   universe:
-    - "SAP.DE"
-    - "SIE.DE"
-    - "ALV.DE"
-    - "BAS.DE"
-    - "BAY.DE"
-    - "BMW.DE"
-    - "VOW3.DE"
-    - "MBG.DE"
-    - "CONT.DE"
-    - "DTG.DE"
+    - RHMG.DE
+    - ENR1n.DE
+    - TKAG.DE
+    - FTKn.DE
+    - ACT1.DE
+    - DEZG.DE
 
   indices:
     - ".GDAXI"  # DAX Index
@@ -22,12 +18,12 @@ data:
     - "HIGH_1"
     - "LOW_1"
     - "TRDPRC_1"
-    - "VOLUME"
+    - "ACVOL_1"
 
   periods:
     daily:
-      interval: "D"
-      start: "2015-01-01"
+      interval: "daily"
+      start: "2024-01-01"
       end: "2025-11-15"
 
     intraday:
