@@ -9,6 +9,7 @@ import time
 import joblib
 from pathlib import Path
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 # Import eigener Module
 from Datagrabber import DataGrabber
@@ -63,6 +64,22 @@ class ModelComparison:
             # Train-Test Split (chronologisch, kein Shuffle!)
             test_split = self.config.get("training.test_split", 0.2)
             X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
+
+            # Skaliere nur auf Basis des Trainingssets, um Data Leakage zu vermeiden
+            scaler_method = self.config.get("training.scaling.method", "StandardScaler")
+            scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
+            scaler.fit(X_train)
+
+            X_train = pd.DataFrame(
+                scaler.transform(X_train),
+                columns=X_train.columns,
+                index=X_train.index
+            )
+            X_test = pd.DataFrame(
+                scaler.transform(X_test),
+                columns=X_test.columns,
+                index=X_test.index
+            )
 
             print(f"\nTrain Size: {len(X_train)} samples")
             print(f"Test Size: {len(X_test)} samples")

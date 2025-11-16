@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from ConfigManager import ConfigManager
 
 
@@ -22,13 +21,6 @@ class DataPrep:
             config_path: Pfad zur Config-Datei
         """
         self.config = ConfigManager(config_path)
-
-        # Wähle Scaler basierend auf Config
-        scaler_method = self.config.get("training.scaling.method", "StandardScaler")
-        if scaler_method == "MinMaxScaler":
-            self.scaler = MinMaxScaler()
-        else:
-            self.scaler = StandardScaler()
 
     def prepare_data(self, df: pd.DataFrame, period_type: str = "daily"):
         """
@@ -194,17 +186,7 @@ class DataPrep:
         X = X.loc[common_index]
         y = y.loc[common_index]
 
-        # Skalierung
-        X_scaled = self.scaler.fit_transform(X)
-
-        # Zurück zu DataFrame (für bessere Lesbarkeit)
-        X_scaled_df = pd.DataFrame(
-            X_scaled,
-            columns=available_features,
-            index=common_index
-        )
-
-        return X_scaled_df, y
+        return X, y
 
 
 def time_series_split(X: pd.DataFrame, y: pd.Series, test_size: float = 0.2):
