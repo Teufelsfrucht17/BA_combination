@@ -54,10 +54,17 @@ features:
   # Hinweis: change_dax oder change_sdax wird automatisch basierend auf Portfolio verwendet
   input_features:
     - momentum_5     # 5-Perioden Momentum
- #   - momentum_10    # 10-Perioden Momentum
-  #  - portfolio_index_change  # Wird zu change_dax oder change_sdax je nach Portfolio
-   # - vdax_absolute  # VDAX absoluter Wert
-   # - volume_ratio   # Volume Verhältnis
+    - momentum_10    # 10-Perioden Momentum
+    - momentum_20    # 20-Perioden Momentum
+    - portfolio_index_change  # Wird zu change_dax oder change_sdax je nach Portfolio
+    - vdax_absolute  # VDAX absoluter Wert
+    - volume_ratio   # Volume Verhältnis
+    - rolling_volatility_10   # Volatilität über 10 Perioden
+    - rolling_volatility_20   # Volatilität über 20 Perioden
+    - hour_sin       # Intraday: zyklische Stunde (Sinus)
+    - hour_cos       # Intraday: zyklische Stunde (Cosinus)
+    - dow_sin        # Wochentag (Sinus)
+    - dow_cos        # Wochentag (Cosinus)
 
   # Y-Variable (Ziel)
   target: "price_change_next"
@@ -65,22 +72,26 @@ features:
   # Feature Engineering Parameter
   momentum_periods: [5, 10, 20]
   rolling_window: 20
+  volatility_windows: [10, 20]
 
 models:
   # Alle Modelle aus Version 1
   pytorch_nn:
     enabled: true
-    hidden1: 64
-    hidden2: 32
-    epochs: 200
+    hidden1: 128
+    hidden2: 64
+    epochs: 400
     batch_size: 64
-    learning_rate: 0.001
+    learning_rate: 0.0005
     validation_split: 0.2
+    weight_decay: 0.0005
+    early_stopping_patience: 40
+    scheduler_patience: 15
 
   sklearn_nn:
     enabled: true
     hidden_layer_sizes: [64, 32]
-    max_iter: 1000
+    max_iter: 1500
 
   ols:
     enabled: true

@@ -5,9 +5,13 @@ Holt sowohl tägliche als auch 30-Min Daten basierend auf config.yaml
 
 import datetime
 from pathlib import Path
+from typing import Dict, List, Optional
 import pandas as pd
 import LSEG as LS
 from ConfigManager import ConfigManager
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class DataGrabber:
@@ -22,42 +26,65 @@ class DataGrabber:
         """
         self.config = ConfigManager(config_path)
 
-    def fetch_all_data(self):
+    def fetch_all_data(self) -> Dict[str, Dict[str, pd.DataFrame]]:
         """
         Holt Daten für alle Portfolios (DAX, SDAX) und beide Perioden (daily, intraday)
 
         Returns:
             Dictionary: {portfolio_name: {period_type: DataFrame}}
             Beispiel: {"dax": {"daily": df, "intraday": df}, "sdax": {...}}
+
+        Raises:
+            ValueError: Wenn Portfolio oder Periode nicht gefunden wird
+            RuntimeError: Wenn API-Calls fehlschlagen
         """
+        logger.info("="*70)
+        logger.info("DATENABRUF GESTARTET - PORTFOLIO-BASIERT")
+        logger.info("="*70)
         print("\n" + "="*70)
         print("DATENABRUF GESTARTET - PORTFOLIO-BASIERT")
         print("="*70)
 
-        all_data = {}
+        all_data: Dict[str, Dict[str, pd.DataFrame]] = {}
         portfolios = self.config.get("data.portfolios", {})
 
+        if not portfolios:
+            logger.warning("Keine Portfolios in Config gefunden")
+            raise ValueError("Keine Portfolios in Config definiert")
+
         for portfolio_name in portfolios.keys():
+            portfolio_display = portfolios[portfolio_name].get('name', portfolio_name.upper())
+            logger.info("="*70)
+            logger.info(f"PORTFOLIO: {portfolio_display}")
+            logger.info("="*70)
             print(f"\n{'='*70}")
-            print(f"PORTFOLIO: {portfolios[portfolio_name].get('name', portfolio_name.upper())}")
+            print(f"PORTFOLIO: {portfolio_display}")
             print(f"{'='*70}")
 
             all_data[portfolio_name] = {}
 
             # Tägliche Daten
+            logger.info(f"[1/2] Hole tägliche Daten für {portfolio_name.upper()}...")
             print(f"\n[1/2] Hole tägliche Daten für {portfolio_name.upper()}...")
             all_data[portfolio_name]["daily"] = self.fetch_portfolio_data(portfolio_name, "daily")
 
             # 30-Min Daten
+            logger.info(f"[2/2] Hole 30-Minuten Daten für {portfolio_name.upper()}...")
             print(f"\n[2/2] Hole 30-Minuten Daten für {portfolio_name.upper()}...")
             all_data[portfolio_name]["intraday"] = self.fetch_portfolio_data(portfolio_name, "intraday")
 
+        logger.info("="*70)
+        logger.info("DATENABRUF ABGESCHLOSSEN")
+        logger.info("="*70)
         print("\n" + "="*70)
         print("DATENABRUF ABGESCHLOSSEN")
         print("="*70)
 
         # Zeige Zusammenfassung
         for portfolio_name in all_data:
+            logger.info(f"{portfolio_name.upper()}:")
+            logger.info(f"  Daily: {all_data[portfolio_name]['daily'].shape}")
+            logger.info(f"  Intraday: {all_data[portfolio_name]['intraday'].shape}")
             print(f"\n{portfolio_name.upper()}:")
             print(f"  Daily: {all_data[portfolio_name]['daily'].shape}")
             print(f"  Intraday: {all_data[portfolio_name]['intraday'].shape}")
@@ -84,48 +111,79 @@ class DataGrabber:
             raise ValueError(f"Periode '{period_type}' nicht in Config gefunden")
 
         # Konvertiere Datum-Strings zu datetime
-        start = datetime.datetime.strptime(period_config["start"], "%Y-%m-%d")
-        end = datetime.datetime.strptime(period_config["end"], "%Y-%m-%d")
+        try:
+            start = datetime.datetime.strptime(period_config["start"], "%Y-%m-%d")
+            end = datetime.datetime.strptime(period_config["end"], "%Y-%m-%d")
+        except (KeyError, ValueError) as e:
+            logger.error(f"Ungültiges Datumsformat in Config: {e}", exc_info=True)
+            raise ValueError(f"Ungültiges Datumsformat in Config: {e}") from e
+
         interval = period_config["interval"]
 
+        logger.info(f"Zeitraum: {start.date()} bis {end.date()}, Interval: {interval}")
         print(f"  Zeitraum: {start.date()} bis {end.date()}")
         print(f"  Interval: {interval}")
 
         # Portfolio Daten (Aktien)
         universe = portfolio_config["universe"]
+        if not universe:
+            raise ValueError(f"Portfolio '{portfolio_name}' hat leeres Universe")
+
+        logger.info(f"Hole Portfolio-Daten ({len(universe)} Aktien)...")
         print(f"  Hole Portfolio-Daten ({len(universe)} Aktien)...")
-        portfolio_df = LS.getHistoryData(
-            universe=universe,
-            fields=self.config.get("data.fields"),
-            start=start,
-            end=end,
-            interval=interval
-        )
-
-        # Portfolio-spezifischer Index (DAX oder SDAX)
-        portfolio_index = portfolio_config["index"]
-        print(f"  Hole Portfolio-Index ({portfolio_index})...")
-        index_df = LS.getHistoryData(
-            universe=[portfolio_index],
-            fields=["TRDPRC_1"],
-            start=start,
-            end=end,
-            interval=interval
-        )
-
-        # Gemeinsame Indizes (VDAX)
-        common_indices = self.config.get("data.common_indices", [])
-        if len(common_indices) > 0:
-            print(f"  Hole gemeinsame Indizes ({len(common_indices)})...")
-            common_df = LS.getHistoryData(
-                universe=common_indices,
-                fields=["TRDPRC_1"],
+        
+        try:
+            portfolio_df = LS.getHistoryData(
+                universe=universe,
+                fields=self.config.get("data.fields"),
                 start=start,
                 end=end,
                 interval=interval
             )
-            # Kombiniere alle drei
-            combined_df = pd.concat([portfolio_df, index_df, common_df], axis=1)
+        except Exception as e:
+            logger.error(f"Fehler beim Abrufen der Portfolio-Daten: {e}", exc_info=True)
+            raise RuntimeError(f"Fehler beim Abrufen der Portfolio-Daten: {e}") from e
+
+        # Portfolio-spezifischer Index (DAX oder SDAX)
+        portfolio_index = portfolio_config.get("index")
+        if not portfolio_index:
+            logger.warning(f"Kein Index für Portfolio '{portfolio_name}' definiert")
+        else:
+            logger.info(f"Hole Portfolio-Index ({portfolio_index})...")
+            print(f"  Hole Portfolio-Index ({portfolio_index})...")
+            
+            try:
+                index_df = LS.getHistoryData(
+                    universe=[portfolio_index],
+                    fields=["TRDPRC_1"],
+                    start=start,
+                    end=end,
+                    interval=interval
+                )
+            except Exception as e:
+                logger.error(f"Fehler beim Abrufen des Index: {e}", exc_info=True)
+                raise RuntimeError(f"Fehler beim Abrufen des Index: {e}") from e
+
+        # Gemeinsame Indizes (VDAX)
+        common_indices = self.config.get("data.common_indices", [])
+        if len(common_indices) > 0:
+            logger.info(f"Hole gemeinsame Indizes ({len(common_indices)})...")
+            print(f"  Hole gemeinsame Indizes ({len(common_indices)})...")
+            
+            try:
+                common_df = LS.getHistoryData(
+                    universe=common_indices,
+                    fields=["TRDPRC_1"],
+                    start=start,
+                    end=end,
+                    interval=interval
+                )
+                # Kombiniere alle drei
+                combined_df = pd.concat([portfolio_df, index_df, common_df], axis=1)
+            except Exception as e:
+                logger.warning(f"Fehler beim Abrufen der gemeinsamen Indizes: {e}", exc_info=True)
+                # Fallback: nur Portfolio + Index
+                combined_df = pd.concat([portfolio_df, index_df], axis=1)
         else:
             # Nur Portfolio + Index
             combined_df = pd.concat([portfolio_df, index_df], axis=1)
@@ -134,9 +192,11 @@ class DataGrabber:
         combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]
 
         # Speichere als Excel
+        logger.debug(f"Speichere als Excel: {portfolio_name}_{period_type}")
         print(f"  Speichere als Excel...")
         self.exceltextwriter(combined_df, f"{portfolio_name}_{period_type}")
 
+        logger.info(f"{portfolio_name.upper()} {period_type} Daten geladen: {combined_df.shape}")
         print(f"  ✓ {portfolio_name.upper()} {period_type} Daten geladen: {combined_df.shape}")
         return combined_df
 
@@ -220,8 +280,12 @@ class DataGrabber:
         Args:
             df: Zu speichernder DataFrame
             name: Name der Excel-Datei (ohne .xlsx)
+
+        Raises:
+            IOError: Wenn Excel-Datei nicht geschrieben werden kann
         """
         if df is None or df.empty:
+            logger.warning("Keine Daten zurückgegeben – keine Excel erstellt.")
             print("⚠️ Keine Daten zurückgegeben – keine Excel erstellt.")
             return
 
@@ -264,13 +328,14 @@ class DataGrabber:
 
                 frame.to_excel(writer, index=False, sheet_name=sheet_name)
 
+        logger.info(f"Excel gespeichert: {out_path}")
         print(f"    ✓ Excel gespeichert: {out_path}")
         return
 
 
 def createExcel(
-    universe: list[str],
-    fields: list[str],
+    universe: List[str],
+    fields: List[str],
     start: datetime.datetime,
     end: datetime.datetime,
     interval: str,
@@ -298,7 +363,16 @@ def createExcel(
 
 if __name__ == "__main__":
     # Test
+    from logger_config import setup_logging
+    setup_logging()
+    
     grabber = DataGrabber()
-    daily_data, intraday_data = grabber.fetch_all_data()
-    print(f"\nDaily Data Shape: {daily_data.shape}")
-    print(f"Intraday Data Shape: {intraday_data.shape}")
+    all_data = grabber.fetch_all_data()
+    
+    for portfolio_name, portfolio_data in all_data.items():
+        logger.info(f"{portfolio_name}:")
+        logger.info(f"  Daily: {portfolio_data['daily'].shape}")
+        logger.info(f"  Intraday: {portfolio_data['intraday'].shape}")
+        print(f"\n{portfolio_name}:")
+        print(f"  Daily: {portfolio_data['daily'].shape}")
+        print(f"  Intraday: {portfolio_data['intraday'].shape}")

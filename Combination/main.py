@@ -13,15 +13,21 @@ Usage:
 
 import argparse
 import sys
+import logging
 from pathlib import Path
 import warnings
+from typing import NoReturn
+
 warnings.filterwarnings('ignore')
 
 from ModelComparison import ModelComparison
 from ConfigManager import ConfigManager
+from logger_config import setup_logging, get_logger
+
+logger = get_logger(__name__)
 
 
-def print_banner():
+def print_banner() -> None:
     """Druckt schönes ASCII-Banner"""
     banner = """
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -33,12 +39,15 @@ def print_banner():
 ║                                                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
     """
-    print(banner)
+    print(banner)  # Banner wird immer auf Console ausgegeben
 
 
-def main():
+def main() -> None:
     """Hauptfunktion"""
-
+    # Logging Setup
+    log_file = Path("Logs") / "main.log" if Path("Logs").exists() else None
+    setup_logging(log_level=logging.INFO, log_file=log_file)
+    
     # Argumente parsen
     parser = argparse.ArgumentParser(
         description='BA Trading System - Unified Version',
@@ -103,17 +112,24 @@ Features in Config:
     # Config Manager initialisieren
     try:
         config = ConfigManager(args.config)
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        logger.error(f"Config-Datei nicht gefunden: {args.config}", exc_info=True)
         print(f"❌ Fehler: Config-Datei nicht gefunden: {args.config}")
         print(f"💡 Tipp: Stelle sicher, dass config.yaml im aktuellen Verzeichnis ist.")
         sys.exit(1)
-    except Exception as e:
+    except ValueError as e:
+        logger.error(f"Fehler beim Laden der Config: {e}", exc_info=True)
         print(f"❌ Fehler beim Laden der Config: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.critical(f"Unerwarteter Fehler beim Laden der Config: {e}", exc_info=True)
+        print(f"❌ Unerwarteter Fehler beim Laden der Config: {e}")
         sys.exit(1)
 
     # Features überschreiben falls angegeben
     if args.features:
         config.set("features.input_features", args.features)
+        logger.info(f"Features überschrieben: {args.features}")
         print(f"✓ Features überschrieben: {args.features}")
 
     # Modelle filtern falls angegeben
@@ -124,11 +140,13 @@ Features in Config:
         # Aktiviere nur gewählte
         for model in args.models:
             config.set(f"models.{model}.enabled", True)
+        logger.info(f"Nur folgende Modelle aktiviert: {args.models}")
         print(f"✓ Nur folgende Modelle aktiviert: {args.models}")
 
     # Speichern deaktivieren falls gewünscht
     if args.no_save:
         config.set("output.save_models", False)
+        logger.info("Modell-Speicherung deaktiviert")
         print(f"✓ Modell-Speicherung deaktiviert")
 
     # Zeige Konfiguration
@@ -158,18 +176,22 @@ Features in Config:
 
     # Model Comparison starten
     try:
+        logger.info("Starte Modellvergleich...")
         comparison = ModelComparison(args.config)
         comparison.run_full_comparison()
 
+        logger.info("Erfolgreich abgeschlossen!")
         print("\n✅ Erfolgreich abgeschlossen!")
         print(f"📁 Ergebnisse: Results/model_comparison.xlsx")
         if config.get("output.save_models"):
-            print(f"💾 Modelle: Models/daily/ und Models/intraday/")
+            print(f"💾 Modelle: Models/")
 
     except KeyboardInterrupt:
+        logger.warning("Abgebrochen durch Benutzer")
         print("\n\n⚠️  Abgebrochen durch Benutzer.")
         sys.exit(1)
     except Exception as e:
+        logger.critical(f"Unerwarteter Fehler: {e}", exc_info=True)
         print(f"\n\n❌ Fehler: {e}")
         import traceback
         traceback.print_exc()

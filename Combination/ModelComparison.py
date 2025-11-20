@@ -8,8 +8,18 @@ import numpy as np
 import time
 import joblib
 from pathlib import Path
+from typing import Dict, Any, Optional, Callable, Tuple
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    # Fallback: Dummy tqdm
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
 
 # Import eigener Module
 from Datagrabber import DataGrabber
@@ -23,6 +33,9 @@ from Models_Wrapper import (
     train_random_forest,
     train_naive_baseline
 )
+from logger_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class ModelComparison:
@@ -41,11 +54,15 @@ class ModelComparison:
     def run_full_comparison(self):
         """Führt kompletten Vergleich durch: Alle Portfolios, Daily vs Intraday, alle Modelle"""
 
+        logger.info("="*70)
+        logger.info("BA TRADING SYSTEM - PORTFOLIO-BASIERTER MODELLVERGLEICH")
+        logger.info("="*70)
         print("\n" + "="*70)
         print("BA TRADING SYSTEM - PORTFOLIO-BASIERTER MODELLVERGLEICH")
         print("="*70)
 
         # 1. Daten holen (Portfolio-basiert)
+        logger.info("[SCHRITT 1/4] DATENABRUF")
         print("\n[SCHRITT 1/4] DATENABRUF")
         grabber = DataGrabber(self.config.path)
         all_data = grabber.fetch_all_data()  # {"dax": {"daily": df, "intraday": df}, "sdax": {...}}
@@ -54,12 +71,14 @@ class ModelComparison:
         prep = DataPrep(self.config.path)
 
         # Für jedes Portfolio
-        for portfolio_name, portfolio_data in all_data.items():
+        portfolios_iter = tqdm(all_data.items(), desc="Portfolios", leave=True) if TQDM_AVAILABLE else all_data.items()
+        for portfolio_name, portfolio_data in portfolios_iter:
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
             portfolio_display_name = portfolio_config.get("name", portfolio_name.upper())
 
             # Für beide Zeitperioden
-            for period_type, data in portfolio_data.items():
+            periods_iter = tqdm(portfolio_data.items(), desc=f"{portfolio_display_name} Perioden", leave=False) if TQDM_AVAILABLE else portfolio_data.items()
+            for period_type, data in periods_iter:
                 print("\n" + "="*70)
                 print(f"TRAINING: {portfolio_display_name} - {period_type.upper()}")
                 print("="*70)
@@ -92,6 +111,7 @@ class ModelComparison:
                     index=X_test.index
                 )
 
+                logger.info(f"Train Size: {len(X_train)} samples, Test Size: {len(X_test)} samples")
                 print(f"\nTrain Size: {len(X_train)} samples")
                 print(f"Test Size: {len(X_test)} samples")
 
@@ -102,10 +122,19 @@ class ModelComparison:
                 )
 
         # 3. Vergleich erstellen
+        logger.info("[SCHRITT 4/4] ERSTELLE VERGLEICHSBERICHT")
         print("\n[SCHRITT 4/4] ERSTELLE VERGLEICHSBERICHT")
         self.create_comparison_report()
 
-    def train_all_models(self, X_train, X_test, y_train, y_test, portfolio_name: str, period_type: str) -> dict:
+    def train_all_models(
+        self, 
+        X_train: pd.DataFrame, 
+        X_test: pd.DataFrame, 
+        y_train: pd.Series, 
+        y_test: pd.Series, 
+        portfolio_name: str, 
+        period_type: str
+    ) -> Dict[str, Optional[Dict[str, Any]]]:
         """
         Trainiert alle aktivierten Modelle
 
@@ -122,217 +151,180 @@ class ModelComparison:
         portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
         portfolio_display = portfolio_config.get("name", portfolio_name.upper())
 
+        logger.info(f"[SCHRITT 2/4] FEATURE ENGINEERING ABGESCHLOSSEN")
+        logger.info(f"[SCHRITT 3/4] MODELL-TRAINING ({portfolio_display} - {period_type.upper()})")
         print(f"\n[SCHRITT 2/4] FEATURE ENGINEERING ABGESCHLOSSEN")
         print(f"[SCHRITT 3/4] MODELL-TRAINING ({portfolio_display} - {period_type.upper()})")
 
-        # =============================================
-        # Baseline Model (Naive Predictor)
-        # =============================================
+        # Definiere Modell-Konfigurationen
+        model_configs = {
+            "naive_baseline": {
+                "enabled": True,  # Immer aktiviert
+                "train_func": train_naive_baseline,
+                "display_name": "Baseline Model (Naive Predictor)",
+                "get_kwargs": lambda: {},
+                "extra_info": "Baseline dient als Vergleichsmaßstab (sollte von ML-Modellen übertroffen werden)"
+            },
+            "pytorch_nn": {
+                "enabled": self.config.get("models.pytorch_nn.enabled", False),
+                "train_func": train_pytorch_model,
+                "display_name": "PyTorch Neural Network",
+                "get_kwargs": lambda: {
+                    "hidden1": self.config.get("models.pytorch_nn.hidden1", 64),
+                    "hidden2": self.config.get("models.pytorch_nn.hidden2", 32),
+                    "epochs": self.config.get("models.pytorch_nn.epochs", 200),
+                    "batch_size": self.config.get("models.pytorch_nn.batch_size", 64),
+                    "lr": self.config.get("models.pytorch_nn.learning_rate", 0.001),
+                    "validation_split": self.config.get("models.pytorch_nn.validation_split", 0.2),
+                    "early_stopping_patience": self.config.get("models.pytorch_nn.early_stopping_patience", 20),
+                    "use_scheduler": True,
+                    "scheduler_patience": self.config.get("models.pytorch_nn.scheduler_patience", 10),
+                    "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
+                    "portfolio_name": portfolio_name,
+                    "period_type": period_type
+                }
+            },
+            "sklearn_nn": {
+                "enabled": self.config.get("models.sklearn_nn.enabled", False),
+                "train_func": train_sklearn_nn,
+                "display_name": "Sklearn Neural Network",
+                "get_kwargs": lambda: {
+                    "hidden_layer_sizes": tuple(self.config.get("models.sklearn_nn.hidden_layer_sizes", [64, 32])),
+                    "max_iter": self.config.get("models.sklearn_nn.max_iter", 500),
+                    "n_splits": self.config.get("training.cross_validation.n_splits", 5),
+                    "use_gridsearch": self.config.get("training.cross_validation.enabled", True)
+                }
+            },
+            "ols": {
+                "enabled": self.config.get("models.ols.enabled", False),
+                "train_func": train_ols,
+                "display_name": "OLS Linear Regression",
+                "get_kwargs": lambda: {}
+            },
+            "ridge": {
+                "enabled": self.config.get("models.ridge.enabled", False),
+                "train_func": train_ridge,
+                "display_name": "Ridge Regression",
+                "get_kwargs": lambda: {
+                    "alpha_values": self.config.get("models.ridge.alpha_values", [0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
+                }
+            },
+            "random_forest": {
+                "enabled": self.config.get("models.random_forest.enabled", False),
+                "train_func": train_random_forest,
+                "display_name": "Random Forest",
+                "get_kwargs": lambda: {
+                    "n_estimators": self.config.get("models.random_forest.n_estimators", 300),
+                    "max_depth": self.config.get("models.random_forest.max_depth", 10),
+                    "min_samples_split": self.config.get("models.random_forest.min_samples_split", 5),
+                    "n_splits": self.config.get("training.cross_validation.n_splits", 5),
+                    "use_gridsearch": self.config.get("training.cross_validation.enabled", True)
+                }
+            }
+        }
+
+        # Trainiere alle Modelle
+        for model_name, config in model_configs.items():
+            if not config["enabled"]:
+                continue
+
+            self._train_single_model(
+                model_name=model_name,
+                config=config,
+                X_train=X_train,
+                X_test=X_test,
+                y_train=y_train,
+                y_test=y_test,
+                results=results
+            )
+
+        return results
+
+    def _train_single_model(
+        self,
+        model_name: str,
+        config: Dict[str, Any],
+        X_train: pd.DataFrame,
+        X_test: pd.DataFrame,
+        y_train: pd.Series,
+        y_test: pd.Series,
+        results: Dict[str, Optional[Dict[str, Any]]]
+    ) -> None:
+        """
+        Trainiert ein einzelnes Modell (Helper-Methode zur Reduzierung von Code-Duplikation)
+
+        Args:
+            model_name: Name des Modells
+            config: Modell-Konfiguration (enabled, train_func, display_name, get_kwargs, extra_info)
+            X_train, X_test, y_train, y_test: Train/Test Splits
+            results: Dictionary in das Ergebnisse geschrieben werden
+        """
         print(f"\n{'─'*60}")
-        print("Baseline Model (Naive Predictor)")
+        print(config["display_name"])
         print(f"{'─'*60}")
 
         start = time.time()
 
         try:
-            model, metrics = train_naive_baseline(X_train, y_train, X_test, y_test)
+            # Hole kwargs
+            kwargs = config.get("get_kwargs", lambda: {})()
+
+            # Trainiere Modell
+            model, metrics = config["train_func"](X_train, y_train, X_test, y_test, **kwargs)
 
             training_time = time.time() - start
 
-            results["naive_baseline"] = {
+            results[model_name] = {
                 "model": model,
                 "metrics": metrics,
                 "training_time": training_time
             }
 
-            print(f"  ✓ R² Test: {metrics['r2']:.4f}")
-            print(f"  ✓ MSE: {metrics['mse']:.6f}")
-            print(f"  ✓ MAE: {metrics['mae']:.6f}")
-            print(f"  ✓ Training Zeit: {training_time:.2f}s")
-            print("  ℹ️  Baseline dient als Vergleichsmaßstab (sollte von ML-Modellen übertroffen werden)")
+            # Zeige Ergebnisse
+            self._print_model_results(metrics, training_time, model_name, config.get("extra_info"))
 
-        except Exception as e:
+        except (RuntimeError, ValueError) as e:
+            logger.error(f"Fehler beim Training von {model_name}: {e}", exc_info=True)
             print(f"  ✗ Fehler: {e}")
-            results["naive_baseline"] = None
+            results[model_name] = None
+        except Exception as e:
+            logger.critical(f"Unerwarteter Fehler beim Training von {model_name}: {e}", exc_info=True)
+            print(f"  ✗ Unerwarteter Fehler: {e}")
+            results[model_name] = None
 
-        # =============================================
-        # PyTorch Neural Network
-        # =============================================
-        if self.config.get("models.pytorch_nn.enabled"):
-            print(f"\n{'─'*60}")
-            print("PyTorch Neural Network")
-            print(f"{'─'*60}")
+    def _print_model_results(
+        self,
+        metrics: Dict[str, Any],
+        training_time: float,
+        model_name: str,
+        extra_info: Optional[str] = None
+    ) -> None:
+        """
+        Druckt Modell-Ergebnisse einheitlich
 
-            start = time.time()
+        Args:
+            metrics: Dictionary mit Metriken
+            training_time: Trainingszeit in Sekunden
+            model_name: Name des Modells
+            extra_info: Optional zusätzliche Information
+        """
+        print(f"  ✓ R² Test: {metrics['r2']:.4f}")
+        print(f"  ✓ MSE: {metrics['mse']:.6f}")
+        print(f"  ✓ MAE: {metrics['mae']:.6f}")
+        
+        # Zusätzliche Metriken falls vorhanden
+        if 'best_alpha' in metrics:
+            print(f"  ✓ Best Alpha: {metrics['best_alpha']}")
+        
+        print(f"  ✓ Training Zeit: {training_time:.2f}s")
+        
+        if extra_info:
+            print(f"  ℹ️  {extra_info}")
 
-            try:
-                model, metrics = train_pytorch_model(
-                    X_train, y_train, X_test, y_test,
-                    hidden1=self.config.get("models.pytorch_nn.hidden1", 64),
-                    hidden2=self.config.get("models.pytorch_nn.hidden2", 32),
-                    epochs=self.config.get("models.pytorch_nn.epochs", 200),
-                    batch_size=self.config.get("models.pytorch_nn.batch_size", 64),
-                    lr=self.config.get("models.pytorch_nn.learning_rate", 0.001),
-                    validation_split=self.config.get("models.pytorch_nn.validation_split", 0.2),
-                    early_stopping_patience=20,
-                    use_scheduler=True
-                )
-
-                training_time = time.time() - start
-
-                results["pytorch_nn"] = {
-                    "model": model,
-                    "metrics": metrics,
-                    "training_time": training_time
-                }
-
-                print(f"  ✓ R² Test: {metrics['r2']:.4f}")
-                print(f"  ✓ MSE: {metrics['mse']:.6f}")
-                print(f"  ✓ MAE: {metrics['mae']:.6f}")
-                print(f"  ✓ Training Zeit: {training_time:.2f}s")
-
-            except Exception as e:
-                print(f"  ✗ Fehler: {e}")
-                results["pytorch_nn"] = None
-
-        # =============================================
-        # Sklearn Neural Network
-        # =============================================
-        if self.config.get("models.sklearn_nn.enabled"):
-            print(f"\n{'─'*60}")
-            print("Sklearn Neural Network")
-            print(f"{'─'*60}")
-
-            start = time.time()
-
-            try:
-                model, metrics = train_sklearn_nn(
-                    X_train, y_train, X_test, y_test,
-                    hidden_layer_sizes=tuple(self.config.get("models.sklearn_nn.hidden_layer_sizes", [64, 32])),
-                    max_iter=self.config.get("models.sklearn_nn.max_iter", 500),
-                    n_splits=self.config.get("training.cross_validation.n_splits", 5),
-                    use_gridsearch=self.config.get("training.cross_validation.enabled", True)
-                )
-
-                training_time = time.time() - start
-
-                results["sklearn_nn"] = {
-                    "model": model,
-                    "metrics": metrics,
-                    "training_time": training_time
-                }
-
-                print(f"  ✓ R² Test: {metrics['r2']:.4f}")
-                print(f"  ✓ MSE: {metrics['mse']:.6f}")
-                print(f"  ✓ MAE: {metrics['mae']:.6f}")
-                print(f"  ✓ Training Zeit: {training_time:.2f}s")
-
-            except Exception as e:
-                print(f"  ✗ Fehler: {e}")
-                results["sklearn_nn"] = None
-
-        # =============================================
-        # OLS
-        # =============================================
-        if self.config.get("models.ols.enabled"):
-            print(f"\n{'─'*60}")
-            print("OLS Linear Regression")
-            print(f"{'─'*60}")
-
-            start = time.time()
-
-            try:
-                model, metrics = train_ols(X_train, y_train, X_test, y_test)
-
-                training_time = time.time() - start
-
-                results["ols"] = {
-                    "model": model,
-                    "metrics": metrics,
-                    "training_time": training_time
-                }
-
-                print(f"  ✓ R² Test: {metrics['r2']:.4f}")
-                print(f"  ✓ MSE: {metrics['mse']:.6f}")
-                print(f"  ✓ MAE: {metrics['mae']:.6f}")
-                print(f"  ✓ Training Zeit: {training_time:.2f}s")
-
-            except Exception as e:
-                print(f"  ✗ Fehler: {e}")
-                results["ols"] = None
-
-        # =============================================
-        # Ridge Regression
-        # =============================================
-        if self.config.get("models.ridge.enabled"):
-            print(f"\n{'─'*60}")
-            print("Ridge Regression")
-            print(f"{'─'*60}")
-
-            start = time.time()
-
-            try:
-                model, metrics = train_ridge(
-                    X_train, y_train, X_test, y_test,
-                    alpha_values=self.config.get("models.ridge.alpha_values", [0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
-                )
-
-                training_time = time.time() - start
-
-                results["ridge"] = {
-                    "model": model,
-                    "metrics": metrics,
-                    "training_time": training_time
-                }
-
-                print(f"  ✓ R² Test: {metrics['r2']:.4f}")
-                print(f"  ✓ MSE: {metrics['mse']:.6f}")
-                print(f"  ✓ MAE: {metrics['mae']:.6f}")
-                print(f"  ✓ Best Alpha: {metrics.get('best_alpha', 'N/A')}")
-                print(f"  ✓ Training Zeit: {training_time:.2f}s")
-
-            except Exception as e:
-                print(f"  ✗ Fehler: {e}")
-                results["ridge"] = None
-
-        # =============================================
-        # Random Forest
-        # =============================================
-        if self.config.get("models.random_forest.enabled"):
-            print(f"\n{'─'*60}")
-            print("Random Forest")
-            print(f"{'─'*60}")
-
-            start = time.time()
-
-            try:
-                model, metrics = train_random_forest(
-                    X_train, y_train, X_test, y_test,
-                    n_estimators=self.config.get("models.random_forest.n_estimators", 300),
-                    max_depth=self.config.get("models.random_forest.max_depth", 10),
-                    min_samples_split=self.config.get("models.random_forest.min_samples_split", 5),
-                    n_splits=self.config.get("training.cross_validation.n_splits", 5),
-                    use_gridsearch=self.config.get("training.cross_validation.enabled", True)
-                )
-
-                training_time = time.time() - start
-
-                results["random_forest"] = {
-                    "model": model,
-                    "metrics": metrics,
-                    "training_time": training_time
-                }
-
-                print(f"  ✓ R² Test: {metrics['r2']:.4f}")
-                print(f"  ✓ MSE: {metrics['mse']:.6f}")
-                print(f"  ✓ MAE: {metrics['mae']:.6f}")
-                print(f"  ✓ Training Zeit: {training_time:.2f}s")
-
-            except Exception as e:
-                print(f"  ✗ Fehler: {e}")
-                results["random_forest"] = None
-
-        return results
+        logger.info(
+            f"{model_name}: R²={metrics['r2']:.4f}, MSE={metrics['mse']:.6f}, "
+            f"MAE={metrics['mae']:.6f}, Time={training_time:.2f}s"
+        )
 
     def create_comparison_report(self):
         """Erstellt detaillierten Vergleichsbericht als Excel (Portfolio-basiert)"""
@@ -366,6 +358,8 @@ class ModelComparison:
                     "R2_Train": model_results["metrics"].get("train_r2", np.nan),
                     "MSE": model_results["metrics"]["mse"],
                     "MAE": model_results["metrics"]["mae"],
+                    "Directional_Accuracy": model_results["metrics"].get("directional_accuracy", np.nan),
+                    "Directional_Accuracy_Train": model_results["metrics"].get("directional_accuracy_train", np.nan),
                     "Training_Time_s": model_results["training_time"]
                 })
 
@@ -373,6 +367,7 @@ class ModelComparison:
         df_comparison = pd.DataFrame(comparison_data)
 
         if df_comparison.empty:
+            logger.warning("Keine Ergebnisse zum Vergleichen!")
             print("⚠️ Keine Ergebnisse zum Vergleichen!")
             return
 
@@ -426,9 +421,11 @@ class ModelComparison:
 
         # Speichere Modelle
         if self.config.get("output.save_models"):
+            logger.info("Speichere Modelle...")
             print("\n💾 Speichere Modelle...")
             self.save_models()
 
+        logger.info(f"Ergebnisse gespeichert: {output_path}")
         print(f"\n✅ Ergebnisse gespeichert: {output_path}")
         print("="*70 + "\n")
 
@@ -467,6 +464,7 @@ class ModelComparison:
                     print(f"  ✓ {results_key}/{model_name} gespeichert")
 
                 except Exception as e:
+                    logger.error(f"Fehler beim Speichern von {results_key}/{model_name}: {e}", exc_info=True)
                     print(f"  ✗ Fehler beim Speichern von {results_key}/{model_name}: {e}")
 
 
