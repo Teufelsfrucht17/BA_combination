@@ -338,14 +338,38 @@ class DataGrabber:
 
         for file_path in possible_files:
             try:
-                df = pd.read_excel(file_path, sheet_name=0)
-                if df is not None and not df.empty:
-                    logger.info(f"Geladene Fallback-Datei für {portfolio_name}: {file_path}")
-                    return df
-                else:
-                    logger.warning(
-                        f"Gefundene Fallback-Datei {file_path} ist leer – versuche nächste Datei"
+                # Lade alle Sheets und setze sie zu einem DataFrame zusammen
+                sheets = pd.read_excel(file_path, sheet_name=None)
+                merged_df = None
+
+                for sheet_name, sheet_df in sheets.items():
+                    if sheet_df is None or sheet_df.empty:
+                        continue
+
+                    # Stelle sicher, dass eine Datums-Spalte existiert
+                    if "Date" not in sheet_df.columns:
+                        # Versuche erste Spalte als Datum zu interpretieren
+                        sheet_df = sheet_df.rename(columns={sheet_df.columns[0]: "Date"})
+
+                    # Konvertiere Date-Spalte und entferne offensichtliche Duplikate
+                    sheet_df["Date"] = pd.to_datetime(sheet_df["Date"], errors="coerce")
+                    sheet_df = sheet_df.dropna(subset=["Date"]).drop_duplicates(subset=["Date"])
+
+                    if merged_df is None:
+                        merged_df = sheet_df
+                    else:
+                        merged_df = pd.merge(merged_df, sheet_df, on="Date", how="outer")
+
+                if merged_df is not None and not merged_df.empty:
+                    merged_df = merged_df.sort_values("Date")
+                    logger.info(
+                        f"Geladene Fallback-Datei für {portfolio_name}: {file_path} – Spalten: {list(merged_df.columns)}"
                     )
+                    return merged_df
+
+                logger.warning(
+                    f"Gefundene Fallback-Datei {file_path} enthält keine verwertbaren Daten – versuche nächste Datei"
+                )
             except Exception as e:
                 logger.error(f"Fehler beim Laden der Fallback-Datei {file_path}: {e}", exc_info=True)
 
