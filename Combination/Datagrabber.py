@@ -254,7 +254,19 @@ class DataGrabber:
 
             try:
                 # Hole Company-Daten via LSEG API
-                company_df = LS.getCompanyData(universe=universe)
+                # Verwende gleichen Zeitraum wie Price-Daten
+                period_config = self.config.get("data.periods.daily")  # Verwende daily Zeitraum
+                if period_config:
+                    # Erstelle Parameter mit gleichem Zeitraum wie Price-Daten
+                    company_params = {
+                        'Curn': 'USD',
+                        'SDate': period_config.get('start', '2024-01-01'),
+                        'EDate': period_config.get('end', '2025-11-15'),
+                        'Frq': 'D'
+                    }
+                    company_df = LS.getCompanyData(universe=universe, parameters=company_params)
+                else:
+                    company_df = LS.getCompanyData(universe=universe)
 
                 if company_df is None or company_df.empty:
                     logger.warning(f"Keine Company-Daten für Portfolio '{portfolio_name}' erhalten")

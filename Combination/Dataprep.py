@@ -28,7 +28,9 @@ AVAILABLE_FEATURES = {
     'vdax_absolute', 'volume_ratio',
     'rolling_volatility_10', 'rolling_volatility_20',
     'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos',
-    'rsi_14'
+    'rsi_14',
+    # Fama-French/Carhart Faktoren
+    'Mkt_Rf', 'SMB', 'HML', 'WML'
 }
 
 
@@ -48,7 +50,8 @@ class DataPrep:
         self, 
         df: pd.DataFrame, 
         portfolio_name: Optional[str] = None, 
-        period_type: str = "daily"
+        period_type: str = "daily",
+        ff_factors: Optional[pd.DataFrame] = None
     ) -> Tuple[pd.DataFrame, pd.Series]:
         """
         Bereitet Daten für Training vor
@@ -94,7 +97,7 @@ class DataPrep:
         # Feature Engineering
         logger.info("Erstelle Features...")
         print("Erstelle Features...")
-        features_df = self.create_features(df, portfolio_name=portfolio_name)
+        features_df = self.create_features(df, portfolio_name=portfolio_name, ff_factors=ff_factors, period_type=period_type)
         logger.info(f"Features erstellt: {features_df.shape}")
         print(f"  ✓ Features erstellt: {features_df.shape}")
 
@@ -110,7 +113,13 @@ class DataPrep:
         print(f"{'='*60}\n")
         return X, y
 
-    def create_features(self, df: pd.DataFrame, portfolio_name: Optional[str] = None) -> pd.DataFrame:
+    def create_features(
+        self, 
+        df: pd.DataFrame, 
+        portfolio_name: Optional[str] = None,
+        ff_factors: Optional[pd.DataFrame] = None,
+        period_type: str = "daily"
+    ) -> pd.DataFrame:
         """
         Erstellt Features basierend auf Config und Portfolio
 
@@ -239,7 +248,7 @@ class DataPrep:
             dt_index = df.index
             if isinstance(dt_index, pd.PeriodIndex):
                 dt_index = dt_index.to_timestamp()
-
+    
             dow = dt_index.weekday
             features['day_of_week'] = dow
             # Zyklische Kodierung
@@ -281,6 +290,45 @@ class DataPrep:
         fillable_cols = [c for c in features.columns if c not in ['price_change_next', 'price_direction_next']]
         features[fillable_cols] = features[fillable_cols].ffill()
         features = features.dropna()
+
+        # ==========================================
+        # Fama-French/Carhart Faktoren (optional)
+        # ==========================================
+        if ff_factors is not None and not ff_factors.empty:
+            # Merge FFC-Faktoren basierend auf Datum
+            # Für Intraday: Company-Daten müssen bereits auf Tagesbasis zugeordnet sein
+            if isinstance(features.index, pd.DatetimeIndex) and isinstance(ff_factors.index, pd.DatetimeIndex):
+                # Align FFC-Faktoren mit Features-Index
+                # Bei Intraday: Use date (ohne Zeit) für Alignment
+                if period_type == "intraday" or features.index.hour.nunique() > 1:
+                    # Intraday: Extrahiere nur Datum für Alignment
+                    features_date = features.index.normalize()
+                    ff_factors_date = ff_factors.index.normalize()
+                    
+                    # Erstelle Mapping: Datum -> FFC-Faktoren
+                    ff_dict = {}
+                    for date, row in ff_factors.iterrows():
+                        date_only = pd.Timestamp(date).normalize()
+                        if date_only not in ff_dict:
+                            ff_dict[date_only] = row
+                    
+                    # Ordne FFC-Faktoren zu (gleiche Werte für alle Intervalle eines Tages)
+                    for date_idx in features.index:
+                        date_only = pd.Timestamp(date_idx).normalize()
+                        if date_only in ff_dict:
+                            ff_row = ff_dict[date_only]
+                            for col in ['Mkt_Rf', 'SMB', 'HML', 'WML']:
+                                if col in ff_row:
+                                    features.loc[date_idx, col] = ff_row[col]
+                else:
+                    # Daily: Direktes Alignment
+                    for col in ['Mkt_Rf', 'SMB', 'HML', 'WML']:
+                        if col in ff_factors.columns:
+                            features[col] = ff_factors[col]
+                
+                logger.info("FFC-Faktoren hinzugefügt: Mkt_Rf, SMB, HML, WML")
+            else:
+                logger.warning("FFC-Faktoren konnten nicht zugeordnet werden (Index-Problem)")
 
         # ==========================================
         # Optionale Klassifikations-Target

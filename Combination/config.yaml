@@ -50,6 +50,9 @@ data:
       end: "2025-11-15"
 
 features:
+  # Risk-free Rate für Fama-French/Carhart Modelle (in Dezimalform: 2.7% = 0.027)
+  risk_free_rate: 0.027  # 2.7% pro Jahr (anpassbar)
+  
   # X-Variablen (anpassbar)
   # Hinweis: change_dax oder change_sdax wird automatisch basierend auf Portfolio verwendet
   input_features:

@@ -25,6 +25,7 @@ except ImportError:
 from Datagrabber import DataGrabber
 from Dataprep import DataPrep, time_series_split
 from ConfigManager import ConfigManager
+from FamaFrench import FamaFrenchFactorModel, calculate_fama_french_factors
 from Models_Wrapper import (
     train_pytorch_model,
     train_sklearn_nn,
@@ -34,6 +35,7 @@ from Models_Wrapper import (
     train_naive_baseline
 )
 from logger_config import get_logger
+import LSEG as LS
 
 logger = get_logger(__name__)
 
@@ -62,12 +64,17 @@ class ModelComparison:
         print("="*70)
 
         # 1. Daten holen (Portfolio-basiert)
-        logger.info("[SCHRITT 1/4] DATENABRUF")
-        print("\n[SCHRITT 1/4] DATENABRUF")
+        logger.info("[SCHRITT 1/5] DATENABRUF")
+        print("\n[SCHRITT 1/5] DATENABRUF")
         grabber = DataGrabber(self.config.path)
         all_data = grabber.fetch_all_data()  # {"dax": {"daily": df, "intraday": df}, "sdax": {...}}
 
-        # 2. Dataprep
+        # 2. Company-Daten holen (für FFC-Faktoren)
+        logger.info("[SCHRITT 2/5] COMPANY-DATENABRUF")
+        print("\n[SCHRITT 2/5] COMPANY-DATENABRUF")
+        all_company_data = grabber.fetch_company_data()  # {"dax": df, "sdax": df}
+
+        # 3. Dataprep
         prep = DataPrep(self.config.path)
 
         # Für jedes Portfolio
@@ -75,6 +82,31 @@ class ModelComparison:
         for portfolio_name, portfolio_data in portfolios_iter:
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
             portfolio_display_name = portfolio_config.get("name", portfolio_name.upper())
+            
+            # Hole Company-Daten für dieses Portfolio
+            company_df = all_company_data.get(portfolio_name, pd.DataFrame())
+            
+            # Debug: Prüfe ob Company-Daten vorhanden
+            logger.debug(f"Company-Daten für Portfolio '{portfolio_name}': Type={type(company_df)}, Empty={company_df.empty if isinstance(company_df, pd.DataFrame) else 'N/A'}, Shape={company_df.shape if isinstance(company_df, pd.DataFrame) else 'N/A'}")
+            
+            if not isinstance(company_df, pd.DataFrame):
+                logger.warning(f"Company-Daten für Portfolio '{portfolio_name}' ist kein DataFrame: {type(company_df)}")
+                print(f"  ⚠️ WARNUNG: Company-Daten für Portfolio '{portfolio_name}' ist kein DataFrame!")
+                company_df = pd.DataFrame()  # Setze auf leeres DataFrame
+            
+            if company_df.empty:
+                logger.warning(f"Keine Company-Daten für Portfolio '{portfolio_name}' gefunden!")
+                print(f"  ⚠️ WARNUNG: Keine Company-Daten für Portfolio '{portfolio_name}' gefunden!")
+                print(f"     FFC-Faktoren können nicht berechnet werden - nur Runs OHNE FFC werden durchgeführt")
+                logger.debug(f"all_company_data Keys: {list(all_company_data.keys())}")
+                logger.debug(f"all_company_data Types: {[(k, type(v)) for k, v in all_company_data.items()]}")
+            else:
+                logger.info(f"Company-Daten für Portfolio '{portfolio_name}' vorhanden: {company_df.shape}")
+                print(f"  ✓ Company-Daten vorhanden: {company_df.shape}")
+                logger.debug(f"Company-Daten Columns: {list(company_df.columns)[:10]}")
+                logger.debug(f"Company-Daten Index-Type: {type(company_df.index)}")
+                if 'Date' in company_df.columns:
+                    logger.debug(f"Company-Daten Date-Bereich: {pd.to_datetime(company_df['Date'], errors='coerce').min()} bis {pd.to_datetime(company_df['Date'], errors='coerce').max()}")
 
             # Für beide Zeitperioden
             periods_iter = tqdm(portfolio_data.items(), desc=f"{portfolio_display_name} Perioden", leave=False) if TQDM_AVAILABLE else portfolio_data.items()
@@ -83,47 +115,150 @@ class ModelComparison:
                 print(f"TRAINING: {portfolio_display_name} - {period_type.upper()}")
                 print("="*70)
 
-                # Prepare data (mit portfolio_name für korrekte Index-Features)
-                X, y = prep.prepare_data(data, portfolio_name=portfolio_name, period_type=period_type)
+                # Berechne FFC-Faktoren falls Company-Daten vorhanden
+                ff_factors = None
+                if not company_df.empty:
+                    try:
+                        logger.info("Berechne Fama-French/Carhart Faktoren...")
+                        print("  Berechne FFC-Faktoren...")
+                        logger.debug(f"Company-Daten Shape: {company_df.shape}, Columns: {list(company_df.columns)}")
+                        logger.debug(f"Price-Daten Shape: {data.shape}, Index-Type: {type(data.index)}")
+                        
+                        # Für Intraday: Company-Daten auf Tagesbasis zuordnen
+                        if period_type == "intraday":
+                            # Erstelle tägliche Version der Company-Daten (alle Intervalle eines Tages bekommen gleiche Daten)
+                            data_daily = data.copy()
+                            if isinstance(data_daily.index, pd.DatetimeIndex):
+                                data_daily.index = data_daily.index.normalize()
+                            data_daily = data_daily.groupby(data_daily.index).first()  # Ein Wert pro Tag
+                            
+                            logger.debug(f"Daily-Daten für FFC-Berechnung: {data_daily.shape}")
+                            
+                            # Berechne FFC-Faktoren für tägliche Daten
+                            ff_model = FamaFrenchFactorModel(self.config.path)
+                            portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
+                            index_col = f"{portfolio_config.get('index', '.GDAXI')}_TRDPRC_1"
+                            
+                            logger.debug(f"Index-Spalte für FFC: {index_col}")
+                            logger.debug(f"Verfügbare Spalten in data_daily: {list(data_daily.columns)[:10]}...")
+                            
+                            ff_factors_daily = ff_model.calculate_factors(
+                                price_df=data_daily,
+                                company_df=company_df,
+                                index_col=index_col,
+                                portfolio_name=portfolio_name
+                            )
+                            
+                            # Expandiere auf Intraday: Jeder 30-Min Interval bekommt die Werte des Tages
+                            if not ff_factors_daily.empty and isinstance(data.index, pd.DatetimeIndex):
+                                ff_factors = pd.DataFrame(index=data.index, columns=ff_factors_daily.columns)
+                                for date in data.index:
+                                    date_normalized = date.normalize()
+                                    if date_normalized in ff_factors_daily.index:
+                                        ff_factors.loc[date] = ff_factors_daily.loc[date_normalized]
+                                logger.debug(f"FFC-Faktoren auf Intraday expandiert: {ff_factors.shape}")
+                        else:
+                            # Daily: Direkte Berechnung
+                            ff_model = FamaFrenchFactorModel(self.config.path)
+                            portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
+                            index_col = f"{portfolio_config.get('index', '.GDAXI')}_TRDPRC_1"
+                            
+                            logger.debug(f"Index-Spalte für FFC: {index_col}")
+                            logger.debug(f"Verfügbare Spalten in data: {list(data.columns)[:10]}...")
+                            
+                            ff_factors = ff_model.calculate_factors(
+                                price_df=data,
+                                company_df=company_df,
+                                index_col=index_col,
+                                portfolio_name=portfolio_name
+                            )
+                        
+                        if ff_factors is not None and not ff_factors.empty:
+                            logger.info(f"FFC-Faktoren berechnet: {ff_factors.shape}")
+                            print(f"  ✓ FFC-Faktoren berechnet: {ff_factors.shape}")
+                            logger.debug(f"FFC-Faktoren Spalten: {list(ff_factors.columns)}")
+                            logger.debug(f"FFC-Faktoren erste Zeilen:\n{ff_factors.head()}")
+                        else:
+                            logger.warning("FFC-Faktoren konnten nicht berechnet werden (leer oder None)")
+                            print("  ⚠️ FFC-Faktoren konnten nicht berechnet werden (leer oder None)")
+                            logger.debug(f"ff_factors Type: {type(ff_factors)}, Empty: {ff_factors.empty if isinstance(ff_factors, pd.DataFrame) else 'N/A'}")
+                            if isinstance(ff_factors, pd.DataFrame):
+                                logger.debug(f"ff_factors Shape: {ff_factors.shape}")
+                            ff_factors = None
+                    except Exception as e:
+                        logger.error(f"Fehler beim Berechnen der FFC-Faktoren: {e}", exc_info=True)
+                        print(f"  ✗ Fehler bei FFC-Faktoren: {e}")
+                        import traceback
+                        logger.debug(f"Traceback:\n{traceback.format_exc()}")
+                        ff_factors = None
+                else:
+                    logger.warning(f"Company-Daten sind leer für Portfolio '{portfolio_name}' - FFC-Faktoren können nicht berechnet werden")
+                    print(f"  ⚠️ Company-Daten sind leer - FFC-Faktoren können nicht berechnet werden")
 
-                # Train-Test Split (chronologisch, kein Shuffle!)
-                test_split = self.config.get("training.test_split", 0.2)
-                X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
+                # Trainiere Modelle: Einmal OHNE FFC, einmal MIT FFC
+                for use_ffc in [False, True]:
+                    if use_ffc and (ff_factors is None or ff_factors.empty):
+                        logger.warning(f"Überspringe FFC-Run für {portfolio_name}_{period_type} - keine FFC-Daten verfügbar")
+                        print(f"\n{'='*70}")
+                        print(f"FEATURES: MIT FFC-Faktoren")
+                        print(f"{'='*70}")
+                        print(f"  ⚠️ Überspringe FFC-Run - keine FFC-Daten verfügbar")
+                        print(f"     Grund: ff_factors ist {'None' if ff_factors is None else 'leer'}")
+                        continue  # Überspringe FFC-Run wenn keine FFC-Daten verfügbar
+                    
+                    suffix = "_FFC" if use_ffc else ""
+                    results_key = f"{portfolio_name}_{period_type}{suffix}"
+                    
+                    print(f"\n{'='*70}")
+                    print(f"FEATURES: {'MIT FFC-Faktoren' if use_ffc else 'OHNE FFC-Faktoren'}")
+                    print(f"{'='*70}")
 
-                # ========================================
-                # WICHTIG: Zentrale Skalierung hier!
-                # ========================================
-                # Scaler wird NUR auf X_train gefittet, dann auf beide Sets angewendet.
-                # Dies verhindert Data Leakage (Test-Daten beeinflussen nicht das Training).
-                # Alle Modelle erhalten bereits skalierte Daten!
-                scaler_method = self.config.get("training.scaling.method", "StandardScaler")
-                scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
-                scaler.fit(X_train)  # Fit nur auf Trainingsset!
+                    # Prepare data (mit oder ohne FFC-Faktoren)
+                    ff_factors_to_use = ff_factors if use_ffc else None
+                    X, y = prep.prepare_data(
+                        data, 
+                        portfolio_name=portfolio_name, 
+                        period_type=period_type,
+                        ff_factors=ff_factors_to_use
+                    )
 
-                X_train = pd.DataFrame(
-                    scaler.transform(X_train),
-                    columns=X_train.columns,
-                    index=X_train.index
-                )
-                X_test = pd.DataFrame(
-                    scaler.transform(X_test),
-                    columns=X_test.columns,
-                    index=X_test.index
-                )
+                    # Train-Test Split (chronologisch, kein Shuffle!)
+                    test_split = self.config.get("training.test_split", 0.2)
+                    X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
 
-                logger.info(f"Train Size: {len(X_train)} samples, Test Size: {len(X_test)} samples")
-                print(f"\nTrain Size: {len(X_train)} samples")
-                print(f"Test Size: {len(X_test)} samples")
+                    # ========================================
+                    # WICHTIG: Zentrale Skalierung hier!
+                    # ========================================
+                    # Scaler wird NUR auf X_train gefittet, dann auf beide Sets angewendet.
+                    # Dies verhindert Data Leakage (Test-Daten beeinflussen nicht das Training).
+                    # Alle Modelle erhalten bereits skalierte Daten!
+                    scaler_method = self.config.get("training.scaling.method", "StandardScaler")
+                    scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
+                    scaler.fit(X_train)  # Fit nur auf Trainingsset!
 
-                # Trainiere alle Modelle
-                results_key = f"{portfolio_name}_{period_type}"
-                self.results[results_key] = self.train_all_models(
-                    X_train, X_test, y_train, y_test, portfolio_name, period_type
-                )
+                    X_train = pd.DataFrame(
+                        scaler.transform(X_train),
+                        columns=X_train.columns,
+                        index=X_train.index
+                    )
+                    X_test = pd.DataFrame(
+                        scaler.transform(X_test),
+                        columns=X_test.columns,
+                        index=X_test.index
+                    )
 
-        # 3. Vergleich erstellen
-        logger.info("[SCHRITT 4/4] ERSTELLE VERGLEICHSBERICHT")
-        print("\n[SCHRITT 4/4] ERSTELLE VERGLEICHSBERICHT")
+                    logger.info(f"Train Size: {len(X_train)} samples, Test Size: {len(X_test)} samples")
+                    print(f"\nTrain Size: {len(X_train)} samples")
+                    print(f"Test Size: {len(X_test)} samples")
+
+                    # Trainiere alle Modelle
+                    self.results[results_key] = self.train_all_models(
+                        X_train, X_test, y_train, y_test, portfolio_name, period_type, use_ffc=use_ffc
+                    )
+
+        # 4. Vergleich erstellen
+        logger.info("[SCHRITT 5/5] ERSTELLE VERGLEICHSBERICHT")
+        print("\n[SCHRITT 5/5] ERSTELLE VERGLEICHSBERICHT")
         self.create_comparison_report()
 
     def train_all_models(
@@ -133,7 +268,8 @@ class ModelComparison:
         y_train: pd.Series, 
         y_test: pd.Series, 
         portfolio_name: str, 
-        period_type: str
+        period_type: str,
+        use_ffc: bool = False
     ) -> Dict[str, Optional[Dict[str, Any]]]:
         """
         Trainiert alle aktivierten Modelle
@@ -317,7 +453,7 @@ class ModelComparison:
             print(f"  ✓ Best Alpha: {metrics['best_alpha']}")
         
         print(f"  ✓ Training Zeit: {training_time:.2f}s")
-        
+
         if extra_info:
             print(f"  ℹ️  {extra_info}")
 
@@ -333,11 +469,18 @@ class ModelComparison:
         comparison_data = []
 
         for results_key, models in self.results.items():
-            # Parse results_key: "dax_daily" -> portfolio="dax", period="daily"
-            if "_" in results_key:
-                portfolio_name, period = results_key.rsplit("_", 1)
+            # Parse results_key: "dax_daily" oder "dax_daily_FFC" -> portfolio="dax", period="daily", use_ffc=False/True
+            use_ffc = False
+            if results_key.endswith("_FFC"):
+                use_ffc = True
+                results_key_base = results_key[:-4]  # Entferne "_FFC"
             else:
-                portfolio_name, period = "unknown", results_key
+                results_key_base = results_key
+            
+            if "_" in results_key_base:
+                portfolio_name, period = results_key_base.rsplit("_", 1)
+            else:
+                portfolio_name, period = "unknown", results_key_base
 
             # Hole Portfolio-Anzeigenamen
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
@@ -353,6 +496,7 @@ class ModelComparison:
                 comparison_data.append({
                     "Portfolio": portfolio_display,
                     "Period": period,
+                    "FFC_Factors": "Yes" if use_ffc else "No",
                     "Model": model_name,
                     "R2_Test": model_results["metrics"]["r2"],
                     "R2_Train": model_results["metrics"].get("train_r2", np.nan),
@@ -435,11 +579,17 @@ class ModelComparison:
         models_path.mkdir(exist_ok=True)
 
         for results_key, models in self.results.items():
-            # Parse results_key: "dax_daily" -> portfolio="dax", period="daily"
-            if "_" in results_key:
-                portfolio_name, period = results_key.rsplit("_", 1)
+            # Parse results_key: "dax_daily" oder "dax_daily_FFC" -> portfolio="dax", period="daily"
+            # Entferne "_FFC" Suffix falls vorhanden
+            if results_key.endswith("_FFC"):
+                results_key_base = results_key[:-4]  # Entferne "_FFC"
             else:
-                portfolio_name, period = "unknown", results_key
+                results_key_base = results_key
+            
+            if "_" in results_key_base:
+                portfolio_name, period = results_key_base.rsplit("_", 1)
+            else:
+                portfolio_name, period = "unknown", results_key_base
 
             # Erstelle Unterordner: Models/dax_daily/
             portfolio_period_path = models_path / results_key

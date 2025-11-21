@@ -152,8 +152,8 @@ DEFAULT_COMPANY_FIELDS = [
 
 DEFAULT_COMPANY_PARAMS = {
     'Curn': 'USD',
-    'SDate': '2024-01-01',
-    "EDate": "2024-12-31",
+    'SDate': '2024-01-01',  # Gleicher Start wie Price-Daten
+    "EDate": "2025-11-15",  # Gleiches Ende wie Price-Daten
     "Frq": "D"
 }
 
