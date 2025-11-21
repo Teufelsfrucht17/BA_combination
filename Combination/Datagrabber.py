@@ -200,6 +200,104 @@ class DataGrabber:
         print(f"  ✓ {portfolio_name.upper()} {period_type} Daten geladen: {combined_df.shape}")
         return combined_df
 
+    def fetch_company_data(self) -> Dict[str, pd.DataFrame]:
+        """
+        Holt fundamentale Company-Daten für alle Portfolios (DAX, SDAX)
+        
+        Diese Daten werden für Fama-French/Carhart Modelle benötigt.
+        Erstellt separate Excel-Dateien für jedes Portfolio.
+
+        Returns:
+            Dictionary: {portfolio_name: DataFrame}
+            Beispiel: {"dax": df, "sdax": df}
+
+        Raises:
+            ValueError: Wenn Portfolio nicht gefunden wird
+            RuntimeError: Wenn API-Calls fehlschlagen
+        """
+        logger.info("="*70)
+        logger.info("COMPANY-DATENABRUF GESTARTET")
+        logger.info("="*70)
+        print("\n" + "="*70)
+        print("COMPANY-DATENABRUF GESTARTET")
+        print("="*70)
+
+        all_company_data: Dict[str, pd.DataFrame] = {}
+        portfolios = self.config.get("data.portfolios", {})
+
+        if not portfolios:
+            logger.warning("Keine Portfolios in Config gefunden")
+            raise ValueError("Keine Portfolios in Config definiert")
+
+        for portfolio_name in portfolios.keys():
+            portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
+            if portfolio_config is None:
+                logger.error(f"Portfolio '{portfolio_name}' nicht in Config gefunden")
+                raise ValueError(f"Portfolio '{portfolio_name}' nicht in Config gefunden")
+
+            portfolio_display = portfolio_config.get('name', portfolio_name.upper())
+            logger.info("="*70)
+            logger.info(f"PORTFOLIO: {portfolio_display} - COMPANY DATA")
+            logger.info("="*70)
+            print(f"\n{'='*70}")
+            print(f"PORTFOLIO: {portfolio_display} - COMPANY DATA")
+            print(f"{'='*70}")
+
+            # Hole Universe (Aktien) aus Portfolio
+            universe = portfolio_config["universe"]
+            if not universe:
+                logger.warning(f"Portfolio '{portfolio_name}' hat leeres Universe, überspringe...")
+                continue
+
+            logger.info(f"Hole Company-Daten für {len(universe)} Aktien...")
+            print(f"  Hole Company-Daten ({len(universe)} Aktien)...")
+
+            try:
+                # Hole Company-Daten via LSEG API
+                company_df = LS.getCompanyData(universe=universe)
+
+                if company_df is None or company_df.empty:
+                    logger.warning(f"Keine Company-Daten für Portfolio '{portfolio_name}' erhalten")
+                    print(f"  ⚠️ Keine Company-Daten erhalten")
+                    continue
+
+                # Speichere als Excel
+                logger.info(f"Speichere als Excel: {portfolio_name}_company_data")
+                print(f"  Speichere als Excel...")
+                self.exceltextwriter(company_df, f"{portfolio_name}_company_data")
+
+                all_company_data[portfolio_name] = company_df
+
+                logger.info(f"{portfolio_name.upper()} Company-Daten geladen: {company_df.shape}")
+                print(f"  ✓ {portfolio_name.upper()} Company-Daten geladen: {company_df.shape}")
+
+            except Exception as e:
+                logger.error(
+                    f"Fehler beim Abrufen der Company-Daten für Portfolio '{portfolio_name}': {e}",
+                    exc_info=True
+                )
+                print(f"  ✗ Fehler: {e}")
+                # Weiter mit nächstem Portfolio
+                continue
+
+        logger.info("="*70)
+        logger.info("COMPANY-DATENABRUF ABGESCHLOSSEN")
+        logger.info("="*70)
+        print("\n" + "="*70)
+        print("COMPANY-DATENABRUF ABGESCHLOSSEN")
+        print("="*70)
+
+        # Zeige Zusammenfassung
+        if all_company_data:
+            for portfolio_name, df in all_company_data.items():
+                logger.info(f"{portfolio_name.upper()}: {df.shape}")
+                print(f"\n{portfolio_name.upper()}: {df.shape}")
+        else:
+            logger.warning("Keine Company-Daten geladen")
+            print("⚠️ Keine Company-Daten geladen")
+
+        return all_company_data
+
     def fetch_period_data(self, period_type: str) -> pd.DataFrame:
         """
         Holt Daten für eine bestimmte Periode (daily/intraday)
@@ -314,17 +412,27 @@ class DataGrabber:
             out_path, engine="xlsxwriter", datetime_format="yyyy-mm-dd hh:mm:ss"
         ) as writer:
             for column in df.columns:
-                sheet_name = str(column).strip()[:31] or "sheet"
+                # Sheet-Name: Max 31 Zeichen (Excel-Limit), bereinige für ungültige Zeichen
+                sheet_name = str(column).strip()[:31]
+                # Entferne ungültige Zeichen für Excel Sheet-Namen
+                sheet_name = sheet_name.replace("/", "_").replace("\\", "_").replace("?", "_")
+                sheet_name = sheet_name.replace("*", "_").replace("[", "_").replace("]", "_")
+                sheet_name = sheet_name.replace(":", "_").replace("'", "_")
+                
+                if not sheet_name:
+                    sheet_name = "sheet"
+                
+                # Erstelle Frame mit Date und aktueller Spalte, behalte Originalnamen
                 if "Date" in d.columns:
                     frame = d[["Date", column]].copy()
                 else:
                     # Fallback: ohne Datums-Spalte
                     frame = d[[column]].copy()
-                # Spaltennamen vereinheitlichen, damit keine MultiIndex-Header entstehen
-                if "Date" in frame.columns and frame.shape[1] == 2:
-                    frame.columns = ["Date", "Price"]
-                elif frame.shape[1] == 1:
-                    frame.columns = ["Price"]
+                
+                # Behalte die Original-Spaltennamen (keine Umbenennung in "Date" und "Price")
+                # Nur bereinige MultiIndex falls vorhanden
+                if isinstance(frame.columns, pd.MultiIndex):
+                    frame.columns = [str(col).replace("/", "_") for col in frame.columns]
 
                 frame.to_excel(writer, index=False, sheet_name=sheet_name)
 
@@ -367,6 +475,8 @@ if __name__ == "__main__":
     setup_logging()
     
     grabber = DataGrabber()
+    
+    # Hole historische Daten (Daily + Intraday)
     all_data = grabber.fetch_all_data()
     
     for portfolio_name, portfolio_data in all_data.items():
@@ -376,3 +486,13 @@ if __name__ == "__main__":
         print(f"\n{portfolio_name}:")
         print(f"  Daily: {portfolio_data['daily'].shape}")
         print(f"  Intraday: {portfolio_data['intraday'].shape}")
+    
+    # Hole fundamentale Company-Daten (für Fama-French Modelle)
+    print("\n" + "="*70)
+    print("STARTE COMPANY-DATENABRUF")
+    print("="*70)
+    company_data = grabber.fetch_company_data()
+    
+    for portfolio_name, df in company_data.items():
+        logger.info(f"{portfolio_name} Company Data: {df.shape}")
+        print(f"\n{portfolio_name.upper()} Company Data: {df.shape}")
