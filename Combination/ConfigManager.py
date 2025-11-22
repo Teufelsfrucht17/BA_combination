@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
         "volatility_windows": [10, 20]
     },
     "models": {
+        "active_models": [],
         "pytorch_nn": {
             "enabled": True,
             "hidden1": 128,
@@ -64,13 +65,14 @@ DEFAULT_CONFIG = {
             "alpha_values": [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
         },
         "random_forest": {
-            "enabled": True,
+            "enabled": False,
             "n_estimators": 300,
             "max_depth": 10,
             "min_samples_split": 5
         }
     },
     "training": {
+        "ffc_runs": False,
         "test_split": 0.2,
         "cross_validation": {
             "enabled": True,
@@ -186,6 +188,11 @@ class ConfigManager:
         if not 0 < test_split < 1:
             raise ValueError(f"test_split muss zwischen 0 und 1 sein, ist aber {test_split}")
 
+        # Validiere ffc_runs
+        ffc_runs = config.get("training", {}).get("ffc_runs", False)
+        if not isinstance(ffc_runs, bool):
+            raise ValueError("training.ffc_runs muss boolesch sein (true/false)")
+
         # Validiere Portfolio-Struktur
         portfolios = config.get("data", {}).get("portfolios", {})
         if not portfolios:
@@ -208,11 +215,28 @@ class ConfigManager:
 
         # Validiere Models
         models = config.get("models", {})
-        enabled_models = [name for name, cfg in models.items() if cfg.get("enabled", False)]
-        if not enabled_models:
+        active_models = models.get("active_models", [])
+
+        if active_models and not isinstance(active_models, list):
+            raise ValueError("models.active_models muss eine Liste sein")
+
+        valid_model_names = {name for name in models.keys() if name != "active_models"}
+        valid_model_names.add("naive_baseline")  # Baseline kann optional explizit gesetzt werden
+
+        if active_models:
+            invalid_models = [m for m in active_models if m not in valid_model_names]
+            if invalid_models:
+                raise ValueError(f"Ungültige Modelle in models.active_models: {invalid_models}")
+
+        enabled_models = [
+            name for name, cfg in models.items()
+            if isinstance(cfg, dict) and cfg.get("enabled", False)
+        ]
+        if not enabled_models and not active_models:
             logger.warning("Keine Modelle in Config aktiviert")
 
-        logger.debug(f"Config validiert: {len(portfolios)} Portfolios, {len(enabled_models)} Modelle aktiviert")
+        selected_models_count = len(active_models) if active_models else len(enabled_models)
+        logger.debug(f"Config validiert: {len(portfolios)} Portfolios, {selected_models_count} Modelle aktiviert/selektiert")
 
     def get(self, key_path: str, default: Any = None) -> Any:
         """

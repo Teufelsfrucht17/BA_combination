@@ -269,9 +269,7 @@ class DataGrabber:
                     company_df = LS.getCompanyData(universe=universe)
 
                 if company_df is None or company_df.empty:
-                    logger.warning(f"Keine Company-Daten für Portfolio '{portfolio_name}' erhalten")
-                    print(f"  ⚠️ Keine Company-Daten erhalten")
-                    continue
+                    raise ValueError("Leere API-Antwort")
 
                 # Speichere als Excel
                 logger.info(f"Speichere als Excel: {portfolio_name}_company_data")
@@ -289,8 +287,22 @@ class DataGrabber:
                     exc_info=True
                 )
                 print(f"  ✗ Fehler: {e}")
-                # Weiter mit nächstem Portfolio
-                continue
+
+                # Fallback: versuche lokale Dateien zu laden
+                fallback_df = self._load_company_data_from_storage(portfolio_name)
+                if fallback_df is not None:
+                    all_company_data[portfolio_name] = fallback_df
+                    print(f"  ✓ Fallback-Daten aus DataStorage geladen: {fallback_df.shape}")
+                    logger.info(
+                        f"Fallback Company-Daten aus DataStorage für {portfolio_name} geladen: {fallback_df.shape}"
+                    )
+                else:
+                    logger.warning(
+                        f"Keine Company-Daten (API oder Fallback) für Portfolio '{portfolio_name}' verfügbar"
+                    )
+                    print("  ⚠️ Keine Company-Daten verfügbar (weder API noch DataStorage)")
+                    # Weiter mit nächstem Portfolio
+                    continue
 
         logger.info("="*70)
         logger.info("COMPANY-DATENABRUF ABGESCHLOSSEN")
@@ -309,6 +321,60 @@ class DataGrabber:
             print("⚠️ Keine Company-Daten geladen")
 
         return all_company_data
+
+    def _load_company_data_from_storage(self, portfolio_name: str) -> Optional[pd.DataFrame]:
+        """Versucht Company-Daten aus dem DataStorage Verzeichnis zu laden."""
+
+        storage_dir = Path("DataStorage")
+        if not storage_dir.exists():
+            logger.debug("DataStorage Verzeichnis nicht gefunden – kein Fallback möglich")
+            return None
+
+        # Suche nach Dateien, die dem Namensmuster entsprechen
+        possible_files = sorted(storage_dir.glob(f"{portfolio_name}_company_data*.xlsx"), reverse=True)
+        if not possible_files:
+            logger.debug(f"Keine gespeicherten Company-Daten für {portfolio_name} gefunden")
+            return None
+
+        for file_path in possible_files:
+            try:
+                # Lade alle Sheets und setze sie zu einem DataFrame zusammen
+                sheets = pd.read_excel(file_path, sheet_name=None)
+                merged_df = None
+
+                for sheet_name, sheet_df in sheets.items():
+                    if sheet_df is None or sheet_df.empty:
+                        continue
+
+                    # Stelle sicher, dass eine Datums-Spalte existiert
+                    if "Date" not in sheet_df.columns:
+                        # Versuche erste Spalte als Datum zu interpretieren
+                        sheet_df = sheet_df.rename(columns={sheet_df.columns[0]: "Date"})
+
+                    # Konvertiere Date-Spalte und entferne offensichtliche Duplikate
+                    sheet_df["Date"] = pd.to_datetime(sheet_df["Date"], errors="coerce")
+                    sheet_df = sheet_df.dropna(subset=["Date"]).drop_duplicates(subset=["Date"])
+
+                    if merged_df is None:
+                        merged_df = sheet_df
+                    else:
+                        merged_df = pd.merge(merged_df, sheet_df, on="Date", how="outer")
+
+                if merged_df is not None and not merged_df.empty:
+                    merged_df = merged_df.sort_values("Date")
+                    logger.info(
+                        f"Geladene Fallback-Datei für {portfolio_name}: {file_path} – Spalten: {list(merged_df.columns)}"
+                    )
+                    return merged_df
+
+                logger.warning(
+                    f"Gefundene Fallback-Datei {file_path} enthält keine verwertbaren Daten – versuche nächste Datei"
+                )
+            except Exception as e:
+                logger.error(f"Fehler beim Laden der Fallback-Datei {file_path}: {e}", exc_info=True)
+
+        # Keine gültige Datei gefunden
+        return None
 
     def fetch_period_data(self, period_type: str) -> pd.DataFrame:
         """

@@ -63,6 +63,11 @@ class ModelComparison:
         print("BA TRADING SYSTEM - PORTFOLIO-BASIERTER MODELLVERGLEICH")
         print("="*70)
 
+        ffc_runs_enabled = bool(self.config.get("training.ffc_runs", False))
+        if not ffc_runs_enabled:
+            logger.info("FFC-Runs sind deaktiviert (training.ffc_runs=false)")
+            print("\nFFC-Faktoren-Runs sind deaktiviert (training.ffc_runs=false)")
+
         # 1. Daten holen (Portfolio-basiert)
         logger.info("[SCHRITT 1/5] DATENABRUF")
         print("\n[SCHRITT 1/5] DATENABRUF")
@@ -195,8 +200,9 @@ class ModelComparison:
                     logger.warning(f"Company-Daten sind leer für Portfolio '{portfolio_name}' - FFC-Faktoren können nicht berechnet werden")
                     print(f"  ⚠️ Company-Daten sind leer - FFC-Faktoren können nicht berechnet werden")
 
-                # Trainiere Modelle: Einmal OHNE FFC, einmal MIT FFC
-                for use_ffc in [False, True]:
+                # Trainiere Modelle: Einmal OHNE FFC, optional MIT FFC
+                use_ffc_options = [False, True] if ffc_runs_enabled else [False]
+                for use_ffc in use_ffc_options:
                     if use_ffc and (ff_factors is None or ff_factors.empty):
                         logger.warning(f"Überspringe FFC-Run für {portfolio_name}_{period_type} - keine FFC-Daten verfügbar")
                         print(f"\n{'='*70}")
@@ -359,8 +365,19 @@ class ModelComparison:
             }
         }
 
+        active_models = self.config.get("models.active_models", [])
+        active_models_set = set(active_models) if isinstance(active_models, (list, tuple, set)) else set()
+
+        if active_models_set:
+            logger.info(f"Nutze models.active_models Filter: {sorted(active_models_set)}")
+            print(f"Aktive Modelle laut Config: {sorted(active_models_set)}")
+
         # Trainiere alle Modelle
         for model_name, config in model_configs.items():
+            if model_name != "naive_baseline" and active_models_set and model_name not in active_models_set:
+                logger.info(f"Überspringe {model_name} (nicht in models.active_models)")
+                continue
+
             if not config["enabled"]:
                 continue
 
@@ -518,8 +535,20 @@ class ModelComparison:
         # Pivot für bessere Übersicht
         # Multi-index Pivot: Portfolio+Period als Spalten
         df_comparison['Portfolio_Period'] = df_comparison['Portfolio'] + "_" + df_comparison['Period']
-        pivot_r2 = df_comparison.pivot(index='Model', columns='Portfolio_Period', values='R2_Test')
-        pivot_mse = df_comparison.pivot(index='Model', columns='Portfolio_Period', values='MSE')
+        # Falls identische (Model, Portfolio_Period) mehrfach vorkommen (z.B. durch mehrfache Runs),
+        # nutzen wir pivot_table mit Mittelwert als Aggregation statt pivot (würde sonst fehlschlagen).
+        pivot_r2 = df_comparison.pivot_table(
+            index='Model',
+            columns='Portfolio_Period',
+            values='R2_Test',
+            aggfunc='mean'
+        )
+        pivot_mse = df_comparison.pivot_table(
+            index='Model',
+            columns='Portfolio_Period',
+            values='MSE',
+            aggfunc='mean'
+        )
 
         # Zusätzlich: Portfolio-spezifische Pivots
         pivot_portfolio = df_comparison.pivot_table(
