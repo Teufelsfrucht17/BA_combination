@@ -163,9 +163,14 @@ Features in Config:
     print(f"Portfolio Größe:  {total_stocks} Aktien")
     print(f"Features:         {config.get('features.input_features')}")
 
-    enabled_models = [m for m in ['pytorch_nn', 'sklearn_nn', 'ols', 'ridge', 'random_forest']
-                     if config.get(f'models.{m}.enabled')]
-    print(f"Aktive Modelle:   {enabled_models}")
+    configured_active_models = config.get("models.active_models", []) or []
+    if configured_active_models:
+        active_models = [m for m in configured_active_models if m in ['pytorch_nn', 'sklearn_nn', 'ols', 'ridge', 'random_forest']]
+    else:
+        active_models = [m for m in ['pytorch_nn', 'sklearn_nn', 'ols', 'ridge', 'random_forest']
+                         if config.get(f'models.{m}.enabled')]
+
+    print(f"Aktive Modelle:   {active_models}")
     print("="*70 + "\n")
 
     # Mode-spezifische Anpassungen

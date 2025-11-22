@@ -78,6 +78,10 @@ features:
   volatility_windows: [10, 20]
 
 models:
+  # Optional: nur bestimmte Modelle laufen lassen (leerer Wert = nutze enabled-Flags)
+  active_models: ["pytorch_nn", "sklearn_nn", "ols", "ridge"]
+  # ["pytorch_nn", "sklearn_nn", "ols", "ridge", "random_forest"]
+
   # Alle Modelle aus Version 1
   pytorch_nn:
     enabled: true
@@ -104,12 +108,13 @@ models:
     alpha_values: [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
 
   random_forest:
-    enabled: true
+    enabled: false
     n_estimators: 300
     max_depth: 10
     min_samples_split: 5
 
 training:
+  ffc_runs: true  # FFC-Faktoren-Läufe aktivieren/deaktivieren
   test_split: 0.2
   cross_validation:
     enabled: true
