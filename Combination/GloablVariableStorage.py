@@ -1,7 +1,7 @@
-# Storing Values In case needed globally
-# Unified Version - Portfolio wird aus config.yaml geladen
+# Storing values in case needed globally
+# Unified version - portfolio is loaded from config.yaml
 
-# DAX 30 Aktien für Unified Version
+# DAX 30 stocks for unified version
 Portfolio = [
     "SAP.DE",
     "SIE.DE",
@@ -15,8 +15,7 @@ Portfolio = [
     "DTG.DE"
 ]
 
-# Korrekte Schreibweise
+# Correct spelling
 ListofStocks_Dow = []
-# Alias für bestehende Verwendungen mit Tippfehler
+# Alias for existing uses with the typo
 LisofStocks_Dow = ListofStocks_Dow
-

@@ -1,33 +1,29 @@
 #!/usr/bin/env python3
-"""Simuliert FFC-Faktoren-Berechnung mit vorhandenen Daten"""
+"""Simulate FFC factor calculation with existing data"""
 
 import pandas as pd
 import numpy as np
-from pathlib import Path
+import os
 
 print("="*70)
-print("SIMULATION: FFC-FAKTOREN-BERECHNUNG")
+print("SIMULATION: FFC FACTOR CALCULATION")
 print("="*70)
 
-# 1. Lade Price-Daten
-print("\n1. LADE PRICE-DATEN:")
+# 1. Load price data
+print("\n1. LOAD PRICE DATA:")
 print("-"*70)
-try:
-    price_df = pd.read_excel('DataStorage/dax_daily.xlsx', sheet_name=0)
-    print(f"  ✓ Price-Daten geladen: {price_df.shape}")
-    print(f"    Columns: {list(price_df.columns)[:5]}")
-    print(f"    Hat Date: {'Date' in price_df.columns}")
-    
-    if 'Date' in price_df.columns:
-        price_df['Date'] = pd.to_datetime(price_df['Date'], errors='coerce')
-        price_df = price_df.set_index('Date')
-        print(f"    Date-Bereich: {price_df.index.min()} bis {price_df.index.max()}")
-except Exception as e:
-    print(f"  ✗ Fehler: {e}")
-    exit(1)
+price_df = pd.read_excel('DataStorage/dax_daily.xlsx', sheet_name=0)
+print(f"  Price data loaded: {price_df.shape}")
+print(f"    Columns: {list(price_df.columns)[:5]}")
+print(f"    Hat Date: {'Date' in price_df.columns}")
 
-# 2. Prüfe ob Company-Daten existieren
-print("\n2. PRÜFE COMPANY-DATEN:")
+if 'Date' in price_df.columns:
+    price_df['Date'] = pd.to_datetime(price_df['Date'], errors='coerce')
+    price_df = price_df.set_index('Date')
+    print(f"    Date range: {price_df.index.min()} to {price_df.index.max()}")
+
+# 2. Check company data
+print("\n2. CHECK COMPANY DATA:")
 print("-"*70)
 company_files = [f for f in os.listdir('DataStorage') 
                  if 'company' in f.lower() 
@@ -36,10 +32,10 @@ company_files = [f for f in os.listdir('DataStorage')
                  and 'dax' in f.lower()]
 
 if len(company_files) == 0:
-    print("  ⚠️ KEINE Company-Daten-Dateien gefunden!")
-    print("  Erstelle Test-Company-Daten...")
+    print("  NO company data files found!")
+    print("  Creating synthetic company data...")
     
-    # Erstelle Test-Company-Daten mit gleichem Zeitraum
+    # Create synthetic company data with matching dates
     dates = price_df.index.normalize().unique()
     company_data = {
         'Date': dates,
@@ -49,9 +45,9 @@ if len(company_files) == 0:
     company_df = pd.DataFrame(company_data)
     company_df['Date'] = pd.to_datetime(company_df['Date'], errors='coerce')
     company_df = company_df.set_index('Date')
-    print(f"  ✓ Test-Company-Daten erstellt: {company_df.shape}")
+    print(f"  Test company data created: {company_df.shape}")
 else:
-    print(f"  ✓ Company-Daten-Datei gefunden: {company_files[0]}")
+    print(f"  Company data file found: {company_files[0]}")
     company_df = pd.read_excel(f'DataStorage/{company_files[0]}', sheet_name=0)
     print(f"    Shape: {company_df.shape}")
     print(f"    Columns: {list(company_df.columns)[:5]}")
@@ -59,25 +55,24 @@ else:
     if 'Date' in company_df.columns:
         company_df['Date'] = pd.to_datetime(company_df['Date'], errors='coerce')
         company_df = company_df.set_index('Date')
-        print(f"    Date-Bereich: {company_df.index.min()} bis {company_df.index.max()}")
+        print(f"    Date range: {company_df.index.min()} to {company_df.index.max()}")
 
-# 3. Prüfe gemeinsame Datenpunkte
-print("\n3. PRÜFE GEMEINSAME DATENPUNKTE:")
+# 3. Check overlapping dates
+print("\n3. CHECK OVERLAPPING DATES:")
 print("-"*70)
 price_index = price_df.index.normalize()
 company_index = company_df.index.normalize()
 
 common = price_index.intersection(company_index)
-print(f"  Price-Daten: {len(price_index)} Datenpunkte")
-print(f"  Company-Daten: {len(company_index)} Datenpunkte")
-print(f"  Gemeinsame: {len(common)} Datenpunkte")
+print(f"  Price data points: {len(price_index)}")
+print(f"  Company data points: {len(company_index)}")
+print(f"  Overlap: {len(common)}")
 
 if len(common) == 0:
-    print("  ⚠️ PROBLEM: Keine gemeinsamen Datenpunkte!")
+    print("  PROBLEM: No overlapping data points!")
     print(f"    Price: {price_index[:5].tolist()}")
     print(f"    Company: {company_index[:5].tolist()}")
 else:
-    print(f"  ✓ Gemeinsame Datenpunkte gefunden!")
+    print("  Overlap found!")
 
 print("\n" + "="*70)
-

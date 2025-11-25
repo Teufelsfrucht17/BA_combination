@@ -1,7 +1,6 @@
 """
-Models_Wrapper.py - Vereinfachte Wrapper für alle Modelle
-Diese Funktionen sind vereinfacht im Vergleich zu Version 1,
-da wir jetzt Portfolio-basiert trainieren (alle Aktien zusammen)
+Models_Wrapper.py - Simplified wrappers for all models
+These functions are streamlined compared to version 1 because we train portfolio-wide
 """
 
 import numpy as np
@@ -11,7 +10,7 @@ import copy
 from pathlib import Path
 from typing import Tuple, Dict, Any, Optional, Union, List
 
-# Sklearn Modelle
+# Sklearn models
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.neural_network import MLPRegressor
@@ -29,15 +28,7 @@ from logger_config import get_logger
 
 logger = get_logger(__name__)
 
-# Progress Bars
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
-    # Fallback: Dummy tqdm
-    def tqdm(iterable, *args, **kwargs):
-        return iterable
+from tqdm import tqdm
 
 # Constants
 DEFAULT_RANDOM_SEED = 42
@@ -50,7 +41,7 @@ DEFAULT_EPOCH_PRINT_INTERVAL = 50
 
 
 def directional_accuracy(y_true: Union[np.ndarray, pd.Series, List], y_pred: Union[np.ndarray, pd.Series, List]) -> float:
-    """Berechnet Trefferrate der Vorzeichen."""
+    """Calculate directional accuracy (matching signs)."""
     if len(y_true) == 0:
         return np.nan
     y_true = np.asarray(y_true).flatten()
@@ -63,7 +54,7 @@ def directional_accuracy(y_true: Union[np.ndarray, pd.Series, List], y_pred: Uni
 # ============================================
 
 class SimpleNet(nn.Module):
-    """Einfaches MLP mit zwei Hidden Layers"""
+    """Simple MLP with two hidden layers"""
 
     def __init__(self, in_features: int, hidden1: int = 64, hidden2: int = 32, out_features: int = 1):
         super().__init__()
@@ -101,73 +92,49 @@ def train_pytorch_model(
     period_type: Optional[str] = None
 ) -> Tuple[nn.Module, Dict[str, Any]]:
     """
-    Trainiert ein PyTorch Neural Network mit Early Stopping und Validation Split.
-    
-    Das Modell verwendet ein einfaches MLP mit zwei Hidden Layers, Dropout,
-    und optional Learning Rate Scheduling.
+    Train a PyTorch MLP with two hidden layers, dropout, early stopping, and an optional LR scheduler.
 
     Args:
-        X_train: Trainings-Features (bereits skaliert)
-        y_train: Trainings-Target
-        X_test: Test-Features (bereits skaliert)
-        y_test: Test-Target
-        hidden1: Größe des ersten Hidden Layers (default: 64)
-        hidden2: Größe des zweiten Hidden Layers (default: 32)
-        epochs: Maximale Anzahl Epochen (default: 200)
-        batch_size: Batch-Größe (default: 64)
-        lr: Learning Rate (default: 0.001)
-        validation_split: Anteil des Trainingssets für Validierung (default: 0.2)
-        early_stopping_patience: Anzahl Epochen ohne Verbesserung vor Abbruch (default: 20)
-        use_scheduler: Ob Learning Rate Scheduler verwendet werden soll (default: True)
-        scheduler_patience: Geduld für Scheduler in Epochen (default: 10)
-        weight_decay: L2-Regularisierung (default: 0.0)
-        standardize_target: Ob y standardisiert werden soll (default: True)
-        portfolio_name: Name des Portfolios für Loss-Logs (optional)
-        period_type: Periode für Loss-Logs (optional)
+        X_train: Scaled training features
+        y_train: Training target
+        X_test: Scaled test features
+        y_test: Test target
+        hidden1: Size of first hidden layer
+        hidden2: Size of second hidden layer
+        epochs: Max epochs
+        batch_size: Batch size
+        lr: Learning rate
+        validation_split: Portion of training data reserved for validation
+        early_stopping_patience: Epochs without improvement before stopping
+        use_scheduler: Enable learning rate scheduler
+        scheduler_patience: Patience for scheduler
+        weight_decay: L2 regularization
+        standardize_target: Whether to standardize the target
+        portfolio_name: Optional portfolio name for loss logs
+        period_type: Optional period name for loss logs
 
     Returns:
-        Tuple von (model, metrics) wobei:
-        - model: Trainiertes PyTorch-Modell
-        - metrics: Dictionary mit Metriken:
-            - 'r2': R² Score auf Test-Set
-            - 'mse': Mean Squared Error
-            - 'mae': Mean Absolute Error
-            - 'train_r2': R² Score auf Train-Set
-            - 'directional_accuracy': Trefferrate der Vorzeichen
-            - 'best_val_loss': Bestes Validation Loss
-            - 'stopped_at_epoch': Epoch bei dem Training gestoppt wurde
-
-    Raises:
-        RuntimeError: Wenn GPU nicht verfügbar ist aber benötigt wird
-        ValueError: Wenn Datenformate nicht kompatibel sind
-
-    Example:
-        >>> X_train = pd.DataFrame(np.random.randn(100, 10))
-        >>> y_train = pd.Series(np.random.randn(100))
-        >>> X_test = pd.DataFrame(np.random.randn(20, 10))
-        >>> y_test = pd.Series(np.random.randn(20))
-        >>> model, metrics = train_pytorch_model(X_train, y_train, X_test, y_test)
-        >>> print(f"R² Score: {metrics['r2']:.4f}")
-        R² Score: 0.1234
+        model: Trained PyTorch model
+        metrics: Dictionary with r2, mse, mae, train_r2, directional_accuracy, best_val_loss, stopped_at_epoch, etc.
     """
-    # Seeds für Reproduzierbarkeit
+    # Seeds for reproducibility
     np.random.seed(DEFAULT_RANDOM_SEED)
     torch.manual_seed(DEFAULT_RANDOM_SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(DEFAULT_RANDOM_SEED)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        logger.debug("CUDA verfügbar, verwende GPU")
+        logger.debug("CUDA available, using GPU")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Konvertiere zu Tensoren
+    # Convert to tensors
     X_train_t = torch.tensor(X_train.values if isinstance(X_train, pd.DataFrame) else X_train, dtype=torch.float32)
     y_train_t = torch.tensor(y_train.values if isinstance(y_train, pd.Series) else y_train, dtype=torch.float32).reshape(-1, 1)
     X_test_t = torch.tensor(X_test.values if isinstance(X_test, pd.DataFrame) else X_test, dtype=torch.float32)
     y_test_t = torch.tensor(y_test.values if isinstance(y_test, pd.Series) else y_test, dtype=torch.float32).reshape(-1, 1)
 
-    # Zielvariable optional standardisieren (nur auf Trainings-Innenbereich fitten)
+    # Optionally standardize target (fit on inner training slice)
     n_train = len(X_train_t)
     val_idx = int(n_train * (1 - validation_split))
     X_train_inner = X_train_t[:val_idx]
@@ -188,22 +155,22 @@ def train_pytorch_model(
         y_train_inner_std = y_train_inner
         y_val_std = y_val
 
-    # Interner Validierungs-Split (chronologisch, letzten X% des Trainingssets)
+    # Internal validation split (chronological)
     print(f"    Inner Train Size: {len(X_train_inner)}, Val Size: {len(X_val)}")
 
-    # DataLoader (kein Shuffle für Zeitreihen!)
+    # DataLoader (no shuffle for time series)
     train_dataset = TensorDataset(X_train_inner, y_train_inner_std)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
 
-    # Modell
+    # Model
     n_features = X_train_t.shape[1]
     model = SimpleNet(in_features=n_features, hidden1=hidden1, hidden2=hidden2, out_features=1).to(device)
 
-    # Optimizer und Loss
+    # Optimizer and loss
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.MSELoss()
 
-    # Optional: Learning Rate Scheduler
+    # Optional: learning rate scheduler
     scheduler = None
     if use_scheduler:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -219,7 +186,7 @@ def train_pytorch_model(
 
     # Training Loop
     model.train()
-    epochs_iter = tqdm(range(epochs), desc="Training", leave=False) if TQDM_AVAILABLE else range(epochs)
+    epochs_iter = tqdm(range(epochs), desc="Training", leave=False)
     for epoch in epochs_iter:
         epoch_loss = 0.0
 
@@ -268,21 +235,21 @@ def train_pytorch_model(
 
         # Early Stopping
         if patience_counter >= early_stopping_patience:
-            logger.info(f"Early Stopping bei Epoch {epoch+1} (Best Val Loss: {best_val_loss:.6f})")
-            print(f"    Early Stopping bei Epoch {epoch+1} (Best Val Loss: {best_val_loss:.6f})")
+            logger.info(f"Early stopping at epoch {epoch+1} (best val loss: {best_val_loss:.6f})")
+            print(f"    Early stopping at epoch {epoch+1} (best val loss: {best_val_loss:.6f})")
             break
 
-    # Lade bestes Modell
+    # Load best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    # Finale Evaluation
+    # Final evaluation
     model.eval()
     with torch.no_grad():
         y_train_pred_std = model(X_train_t.to(device)).cpu().numpy().flatten()
         y_test_pred_std = model(X_test_t.to(device)).cpu().numpy().flatten()
 
-    # Zurück in Original-Skala transformieren
+    # Transform back to original scale
     y_mean_val = y_mean.item() if hasattr(y_mean, "item") else float(y_mean)
     y_std_val = y_std.item() if hasattr(y_std, "item") else float(y_std)
     if standardize_target:
@@ -337,29 +304,23 @@ def train_sklearn_nn(
     use_gridsearch: bool = True
 ) -> Tuple[MLPRegressor, Dict[str, Any]]:
     """
-    Trainiert Sklearn MLP Regressor mit optionalem Hyperparameter-Tuning.
+    Train an sklearn MLPRegressor with optional hyperparameter tuning.
 
-    WICHTIG: Skalierung erfolgt bereits in ModelComparison.py!
-    Daher KEINE zusätzliche Skalierung hier, um Data Leakage zu vermeiden.
+    Note: scaling happens in ModelComparison.py; do not re-scale here to avoid leakage.
 
     Args:
-        X_train: Trainings-Features (bereits skaliert!)
-        y_train: Trainings-Target
-        X_test: Test-Features (bereits skaliert!)
-        y_test: Test-Target
-        hidden_layer_sizes: Tuple mit Layer-Größen (default: (64, 32))
-        max_iter: Maximale Iterationen (default: 1000)
-        n_splits: Anzahl Splits für TimeSeriesSplit (default: 5)
-        use_gridsearch: Ob GridSearch verwendet werden soll (default: True)
+        X_train: Scaled training features
+        y_train: Training target
+        X_test: Scaled test features
+        y_test: Test target
+        hidden_layer_sizes: Layer sizes (default: (64, 32))
+        max_iter: Max iterations
+        n_splits: Splits for TimeSeriesSplit
+        use_gridsearch: Whether to run GridSearchCV
 
     Returns:
-        Tuple von (model, metrics) wobei:
-        - model: Trainiertes MLPRegressor-Modell
-        - metrics: Dictionary mit Metriken (r2, mse, mae, train_r2, directional_accuracy, etc.)
-
-    Raises:
-        ValueError: Wenn Parameter ungültig sind
-        RuntimeError: Wenn Training fehlschlägt
+        model: Trained MLPRegressor
+        metrics: Dict with r2, mse, mae, train_r2, directional_accuracy, etc.
     """
     base_layers = tuple(hidden_layer_sizes)
 
@@ -367,11 +328,11 @@ def train_sklearn_nn(
         return tuple(max(1, int(round(h * factor))) for h in base_layers)
 
     candidate_layers = [base_layers, scale_layers(0.5), scale_layers(1.5)]
-    # Entferne Duplikate bei kleinen Layergrößen
+    # Remove duplicates when layer sizes collapse to same values
     candidate_layers = list(dict.fromkeys(candidate_layers))
 
     if use_gridsearch:
-        # Hyperparameter-Grid für Suche (leicht um den konfigurierten Wert herum)
+        # Hyperparameter grid near configured values
         param_grid = {
             'hidden_layer_sizes': candidate_layers,
             'alpha': [0.0001, 0.001, 0.01],
@@ -469,23 +430,7 @@ def train_ols(
     y_test: Union[pd.Series, np.ndarray]
 ) -> Tuple[LinearRegression, Dict[str, Any]]:
     """
-    Trainiert OLS (Ordinary Least Squares) Linear Regression.
-
-    Einfaches lineares Modell ohne Regularisierung.
-
-    Args:
-        X_train: Trainings-Features
-        y_train: Trainings-Target
-        X_test: Test-Features
-        y_test: Test-Target
-
-    Returns:
-        Tuple von (model, metrics) wobei:
-        - model: Trainiertes LinearRegression-Modell
-        - metrics: Dictionary mit Metriken (r2, mse, mae, train_r2, directional_accuracy)
-
-    Raises:
-        ValueError: Wenn Daten leer oder ungültig sind
+    Train a simple OLS linear regression (no regularization).
     """
     model = LinearRegression()
     model.fit(X_train, y_train)
@@ -517,25 +462,7 @@ def train_ridge(
     alpha_values: Optional[List[float]] = None
 ) -> Tuple[Ridge, Dict[str, Any]]:
     """
-    Trainiert Ridge Regression mit GridSearch über Alpha-Werte.
-
-    Ridge Regression ist eine regularisierte Variante der linearen Regression
-    mit L2-Regularisierung.
-
-    Args:
-        X_train: Trainings-Features
-        y_train: Trainings-Target
-        X_test: Test-Features
-        y_test: Test-Target
-        alpha_values: Liste von Alpha-Werten für GridSearch (default: [0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
-
-    Returns:
-        Tuple von (model, metrics) wobei:
-        - model: Trainiertes Ridge-Modell mit bestem Alpha
-        - metrics: Dictionary mit Metriken (r2, mse, mae, train_r2, directional_accuracy, best_alpha)
-
-    Raises:
-        ValueError: Wenn alpha_values leer ist
+    Train Ridge regression with a grid search over alpha values.
     """
     if alpha_values is None:
         alpha_values = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
@@ -590,31 +517,10 @@ def train_random_forest(
     use_gridsearch: bool = True
 ) -> Tuple[RandomForestRegressor, Dict[str, Any]]:
     """
-    Trainiert Random Forest Regressor mit optionalem Hyperparameter-Tuning.
-
-    Random Forest ist ein Ensemble-Modell aus vielen Entscheidungsbäumen.
-
-    Args:
-        X_train: Trainings-Features
-        y_train: Trainings-Target
-        X_test: Test-Features
-        y_test: Test-Target
-        n_estimators: Anzahl Bäume (default: 300, wird für GridSearch überschrieben)
-        max_depth: Maximale Tiefe (default: 10, wird für GridSearch überschrieben)
-        min_samples_split: Minimale Samples für Split (default: 5, wird für GridSearch überschrieben)
-        n_splits: Anzahl Splits für TimeSeriesSplit (default: 5)
-        use_gridsearch: Ob GridSearch verwendet werden soll (default: True)
-
-    Returns:
-        Tuple von (model, metrics) wobei:
-        - model: Trainiertes RandomForestRegressor-Modell
-        - metrics: Dictionary mit Metriken (r2, mse, mae, train_r2, directional_accuracy, best_params, cv_best_score)
-
-    Raises:
-        ValueError: Wenn Parameter ungültig sind
+    Train a RandomForestRegressor with optional hyperparameter tuning.
     """
     if use_gridsearch:
-        # Hyperparameter-Grid für Suche
+        # Hyperparameter grid for search
         param_grid = {
             'n_estimators': [100, 200, 300],
             'max_depth': [5, 10, 15, None],
@@ -626,7 +532,7 @@ def train_random_forest(
         rf = RandomForestRegressor(random_state=42, n_jobs=-1)
         tscv = TimeSeriesSplit(n_splits=n_splits)
 
-        print(f"    Starte GridSearch mit {n_splits} TimeSeriesSplit-Folds...")
+        print(f"    Starting GridSearch with {n_splits} TimeSeriesSplit folds...")
 
         grid = GridSearchCV(
             rf,
@@ -639,8 +545,8 @@ def train_random_forest(
 
         grid.fit(X_train, y_train)
 
-        print(f"    Beste Parameter: {grid.best_params_}")
-        print(f"    Bester CV R² Score: {grid.best_score_:.4f}")
+        print(f"    Best params: {grid.best_params_}")
+        print(f"    Best CV R² score: {grid.best_score_:.4f}")
 
         model = grid.best_estimator_
 
@@ -659,7 +565,7 @@ def train_random_forest(
         }
 
     else:
-        # Einfaches Training ohne GridSearch
+        # Simple training without GridSearch
         model = RandomForestRegressor(
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -696,29 +602,12 @@ def train_naive_baseline(
     y_test: Union[pd.Series, np.ndarray]
 ) -> Tuple[None, Dict[str, Any]]:
     """
-    Trainiert ein naives Baseline-Modell für Zeitreihen.
+    Train a naive baseline for time series.
 
-    Das Modell sagt einfach voraus: y_pred[t] = y[t-1]
-    (die letzte beobachtete Änderung wird für die nächste Periode übernommen).
-    Dient als Vergleichsmaßstab - ML-Modelle sollten diese Baseline übertreffen.
-
-    Args:
-        X_train: Trainings-Features (wird nicht verwendet, nur für Kompatibilität)
-        y_train: Trainings-Target
-        X_test: Test-Features (wird nicht verwendet, nur für Kompatibilität)
-        y_test: Test-Target
-
-    Returns:
-        Tuple von (None, metrics) wobei:
-        - model: None (kein Modell nötig)
-        - metrics: Dictionary mit Metriken (r2, mse, mae, train_r2, directional_accuracy)
+    The model predicts y_pred[t] = y[t-1]; serves as a benchmark.
     """
-    # Für Zeitreihen: Nimm einfach den letzten Wert als Vorhersage
-    # Trainingsset: Predict mit vorherigem Wert
-    y_train_pred = np.concatenate([[0.0], y_train.values[:-1]])  # Erste Vorhersage = 0
-
-    # Testset: Verwende letzten Wert aus Training als erste Vorhersage,
-    # dann jeweils den vorherigen echten Wert
+    # Use previous value as prediction
+    y_train_pred = np.concatenate([[0.0], y_train.values[:-1]])
     y_test_pred = np.concatenate([[y_train.iloc[-1]], y_test.values[:-1]])
 
     metrics = {
@@ -737,7 +626,7 @@ if __name__ == "__main__":
     # Test
     print("Models Wrapper Test")
 
-    # Erstelle Test-Daten
+    # Create test data
     np.random.seed(42)
     X_train = pd.DataFrame(np.random.randn(100, 5), columns=[f'feature_{i}' for i in range(5)])
     y_train = pd.Series(np.random.randn(100))
@@ -754,4 +643,4 @@ if __name__ == "__main__":
     model, metrics = train_ridge(X_train, y_train, X_test, y_test)
     print(f"R²: {metrics['r2']:.4f}, MSE: {metrics['mse']:.6f}, Best Alpha: {metrics['best_alpha']}")
 
-    print("\n✓ Models Wrapper funktioniert!")
+    print("\nModels Wrapper working!")

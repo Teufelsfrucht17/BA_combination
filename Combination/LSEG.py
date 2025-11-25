@@ -4,67 +4,14 @@ LSEG.py - LSEG/Refinitiv Data API Interface
 
 import lseg.data as ld
 import pandas as pd
-from lseg.data.discovery import Chain
 import datetime
-import time
-from functools import wraps
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any, Optional
 
-import GloablVariableStorage
 from logger_config import get_logger
 
 logger = get_logger(__name__)
 
-# Constants
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_DELAY = 2.0
-DEFAULT_RETRY_BACKOFF = 2.0
 
-
-def retry(max_attempts: int = DEFAULT_MAX_RETRIES, delay: float = DEFAULT_RETRY_DELAY, 
-          backoff: float = DEFAULT_RETRY_BACKOFF):
-    """
-    Decorator für Retry-Logik bei API-Calls
-
-    Args:
-        max_attempts: Maximale Anzahl Versuche
-        delay: Initiale Wartezeit in Sekunden
-        backoff: Multiplikator für Wartezeit bei jedem Retry
-
-    Returns:
-        Decorated Function
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            attempt = 0
-            current_delay = delay
-            
-            while attempt < max_attempts:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    attempt += 1
-                    if attempt >= max_attempts:
-                        logger.error(
-                            "Max Retries erreicht für %s: %s", 
-                            func.__name__, e, exc_info=True
-                        )
-                        raise
-                    
-                    logger.warning(
-                        "Versuch %d/%d fehlgeschlagen für %s: %s. Retry in %.1fs...",
-                        attempt, max_attempts, func.__name__, e, current_delay
-                    )
-                    time.sleep(current_delay)
-                    current_delay *= backoff
-            
-            return None
-        return wrapper
-    return decorator
-
-
-@retry(max_attempts=DEFAULT_MAX_RETRIES, delay=DEFAULT_RETRY_DELAY)
 def getHistoryData(
     universe: List[str], 
     fields: List[str], 
@@ -73,74 +20,64 @@ def getHistoryData(
     interval: str
 ) -> pd.DataFrame:
     """
-    Holt historische Daten von LSEG/Refinitiv API mit Retry-Logik
+    Fetch historical data from the LSEG/Refinitiv API.
 
     Args:
-        universe: Liste von Aktien/Indizes (z.B. ['SAP.DE', '.GDAXI'])
-        fields: Liste von Feldern (z.B. ['TRDPRC_1', 'ACVOL_1'])
-        start: Start-Datum
-        end: End-Datum
-        interval: Intervall (z.B. 'daily', '30min')
+        universe: List of instruments (e.g. ['SAP.DE', '.GDAXI'])
+        fields: List of fields (e.g. ['TRDPRC_1', 'ACVOL_1'])
+        start: Start date
+        end: End date
+        interval: Interval (e.g. 'daily', '30min')
 
     Returns:
-        DataFrame mit historischen Daten
+        DataFrame with historical data
 
     Raises:
-        RuntimeError: Wenn API-Call fehlschlägt
-        ValueError: Wenn Parameter ungültig sind
+        ValueError: If parameters are invalid
     """
     if not universe:
-        raise ValueError("Universe darf nicht leer sein")
+        raise ValueError("Universe must not be empty")
     if not fields:
-        raise ValueError("Fields darf nicht leer sein")
+        raise ValueError("Fields must not be empty")
     if start >= end:
-        raise ValueError(f"Start-Datum ({start}) muss vor End-Datum ({end}) sein")
+        raise ValueError(f"Start date ({start}) must be before end date ({end})")
 
     logger.debug(
-        "Hole Daten: %d Instrumente, %d Felder, %s bis %s, Intervall: %s",
+        "Fetching data: %d instruments, %d fields, %s to %s, interval: %s",
         len(universe), len(fields), start.date(), end.date(), interval
     )
 
-    try:
-        ld.open_session()
-        logger.debug("LSEG Session geöffnet")
+    ld.open_session()
+    logger.debug("LSEG session opened")
 
-        df = ld.get_history(
-            universe=universe,
-            fields=fields,
-            start=start,
-            end=end,
-            interval=interval,
-        )
+    df = ld.get_history(
+        universe=universe,
+        fields=fields,
+        start=start,
+        end=end,
+        interval=interval,
+    )
 
-        logger.info(
-            "Daten erfolgreich geladen: %s Zeilen, %s Spalten",
-            len(df), len(df.columns) if df is not None else 0
-        )
+    logger.info(
+        "Data loaded: %s rows, %s columns",
+        len(df), len(df.columns) if df is not None else 0
+    )
 
-        if df is not None and not df.empty:
-            logger.debug("Erste Datenzeile:\n%s", df.head(1))
+    if df is not None and not df.empty:
+        logger.debug("First row:\n%s", df.head(1))
 
-        return df
+    ld.close_session()
+    logger.debug("LSEG session closed")
 
-    except Exception as e:
-        logger.error("Fehler beim Abrufen der Daten: %s", e, exc_info=True)
-        raise RuntimeError(f"LSEG API-Call fehlgeschlagen: {e}") from e
-
-    finally:
-        try:
-            ld.close_session()
-            logger.debug("LSEG Session geschlossen")
-        except Exception as e:
-            logger.warning("Fehler beim Schließen der Session: %s", e)
+    return df
 
 
-# Keine Tests - wird von Datagrabber aufgerufen
+# No tests here - called from Datagrabber
 
 
-# Constants für Company Data
+# Constants for company data
 DEFAULT_COMPANY_FIELDS = [
-    "TR.CompanyMarketCapitalization.Date",  # Datumsfeld für Market Cap
+    "TR.CompanyMarketCapitalization.Date",  # Date field for market cap
     "TR.CompanyMarketCapitalization",
     "TR.BookValuePerShare",
     "TR.BVPSActValue(Period=FY0)",
@@ -152,122 +89,104 @@ DEFAULT_COMPANY_FIELDS = [
 
 DEFAULT_COMPANY_PARAMS = {
     'Curn': 'USD',
-    'SDate': '2024-01-01',  # Gleicher Start wie Price-Daten
-    "EDate": "2025-11-15",  # Gleiches Ende wie Price-Daten
+    'SDate': '2024-01-01',  # Same start as price data
+    "EDate": "2025-11-15",  # Same end as price data
     "Frq": "D"
 }
 
 
-@retry(max_attempts=DEFAULT_MAX_RETRIES, delay=DEFAULT_RETRY_DELAY)
 def getCompanyData(
     universe: List[str],
     fields: Optional[List[str]] = None,
     parameters: Optional[Dict[str, Any]] = None
 ) -> pd.DataFrame:
     """
-    Holt fundamentale Company-Daten von LSEG/Refinitiv API mit Retry-Logik.
+    Fetch fundamental company data from the LSEG/Refinitiv API.
     
-    Diese Daten werden für Fama-French/Carhart Modelle benötigt (Market Cap, Book Value, etc.)
+    Used for Fama-French/Carhart models (market cap, book value, etc.).
 
     Args:
-        universe: Liste von Aktien (z.B. ['RHMG.DE', 'ENR1n.DE'])
-        fields: Liste von Feldern (default: DEFAULT_COMPANY_FIELDS)
-        parameters: Dictionary mit Parametern (default: DEFAULT_COMPANY_PARAMS)
+        universe: List of tickers (e.g. ['RHMG.DE', 'ENR1n.DE'])
+        fields: List of fields (default: DEFAULT_COMPANY_FIELDS)
+        parameters: Parameter dict (default: DEFAULT_COMPANY_PARAMS)
 
     Returns:
-        DataFrame mit fundamentalen Company-Daten
+        DataFrame with company fundamentals
 
     Raises:
-        RuntimeError: Wenn API-Call fehlschlägt
-        ValueError: Wenn Parameter ungültig sind
+        ValueError: If parameters are invalid
     """
     if not universe:
-        raise ValueError("Universe darf nicht leer sein")
+        raise ValueError("Universe must not be empty")
     
-    # Verwende Defaults falls nicht angegeben
+    # Use defaults if not provided
     if fields is None:
         fields = DEFAULT_COMPANY_FIELDS
     if parameters is None:
         parameters = DEFAULT_COMPANY_PARAMS.copy()
 
     logger.debug(
-        "Hole Company-Daten: %d Instrumente, %d Felder",
+        "Fetching company data: %d instruments, %d fields",
         len(universe), len(fields)
     )
 
-    try:
-        ld.open_session()
-        logger.debug("LSEG Session geöffnet (Company Data)")
+    ld.open_session()
+    logger.debug("LSEG session opened (company data)")
 
-        df = ld.get_data(
-            universe=universe,
-            fields=fields,
-            parameters=parameters
-        )
+    df = ld.get_data(
+        universe=universe,
+        fields=fields,
+        parameters=parameters
+    )
 
-        if df is not None and not df.empty:
-            df = df.copy()
+    if df is not None and not df.empty:
+        df = df.copy()
+        
+        date_col = None
+        for col in df.columns:
+            if isinstance(col, tuple):
+                col_str = ' '.join(str(c) for c in col)
+            else:
+                col_str = str(col)
             
-            # Finde die "TR.CompanyMarketCapitalization.Date" Spalte und benenne sie in "Date" um
-            date_col = None
+            if 'TR.CompanyMarketCapitalization.Date' in col_str or (
+                'CompanyMarketCapitalization' in col_str and 'Date' in col_str
+            ):
+                date_col = col
+                break
+        
+        if date_col is not None:
+            df = df.rename(columns={date_col: 'Date'})
+            logger.info(f"Date column taken from field: {date_col}")
+        else:
             for col in df.columns:
                 if isinstance(col, tuple):
-                    # MultiIndex: Prüfe alle Ebenen
                     col_str = ' '.join(str(c) for c in col)
                 else:
                     col_str = str(col)
-                
-                # Suche nach dem exakten Feld oder ähnlichem
-                if 'TR.CompanyMarketCapitalization.Date' in col_str or (
-                    'CompanyMarketCapitalization' in col_str and 'Date' in col_str
-                ):
-                    date_col = col
+                if 'date' in col_str.lower():
+                    df = df.rename(columns={col: 'Date'})
+                    logger.info(f"Date column taken from field: {col} (fallback)")
                     break
-            
-            if date_col is not None:
-                # Benenne die Spalte einfach in "Date" um
-                df = df.rename(columns={date_col: 'Date'})
-                logger.info(f"Date-Spalte übernommen von Feld: {date_col}")
             else:
-                # Fallback: Suche nach beliebiger Date-Spalte
-                for col in df.columns:
-                    if isinstance(col, tuple):
-                        col_str = ' '.join(str(c) for c in col)
-                    else:
-                        col_str = str(col)
-                    if 'date' in col_str.lower():
-                        df = df.rename(columns={col: 'Date'})
-                        logger.info(f"Date-Spalte übernommen von Feld: {col} (Fallback)")
-                        break
+                if isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
+                    df['Date'] = df.index
+                    logger.info("Date column created from index")
                 else:
-                    # Letzter Fallback: Verwende Index
-                    if isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
-                        df['Date'] = df.index
-                        logger.info("Date-Spalte aus Index erstellt")
-                    else:
-                        logger.warning("Konnte Date-Spalte nicht finden")
-            
-            # Verschiebe Date-Spalte an den Anfang, falls vorhanden
-            if 'Date' in df.columns:
-                cols = ['Date'] + [col for col in df.columns if col != 'Date']
-                df = df[cols]
-            
-            logger.debug("Erste Company-Datenzeile:\n%s", df.head(1))
+                    logger.warning("Could not find a date column")
+        
+        if 'Date' in df.columns:
+            cols = ['Date'] + [col for col in df.columns if col != 'Date']
+            df = df[cols]
+        
+        logger.debug("First company data row:\n%s", df.head(1))
 
-        logger.info(
-            "Company-Daten erfolgreich geladen: %s Zeilen, %s Spalten",
-            len(df), len(df.columns) if df is not None else 0
-        )
+    logger.info(
+        "Company data loaded: %s rows, %s columns",
+        len(df), len(df.columns) if df is not None else 0
+    )
 
-        return df
+    ld.close_session()
+    logger.debug("LSEG session closed (company data)")
 
-    except Exception as e:
-        logger.error("Fehler beim Abrufen der Company-Daten: %s", e, exc_info=True)
-        raise RuntimeError(f"LSEG API-Call für Company-Daten fehlgeschlagen: {e}") from e
-
-    finally:
-        try:
-            ld.close_session()
-            logger.debug("LSEG Session geschlossen (Company Data)")
-        except Exception as e:
-            logger.warning("Fehler beim Schließen der Session: %s", e)
+    return df
