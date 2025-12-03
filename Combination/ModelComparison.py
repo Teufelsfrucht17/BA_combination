@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
-from tqdm import tqdm
-
 # Import eigener Module
 from Datagrabber import DataGrabber
 from Dataprep import DataPrep, time_series_split
@@ -20,16 +18,12 @@ from ConfigManager import ConfigManager
 from FamaFrench import FamaFrenchFactorModel, calculate_fama_french_factors
 from Models_Wrapper import (
     train_pytorch_model,
-    train_sklearn_nn,
     train_ols,
     train_ridge,
     train_random_forest,
     train_naive_baseline
 )
-from logger_config import get_logger
 import LSEG as LS
-
-logger = get_logger(__name__)
 
 
 class ModelComparison:
@@ -48,92 +42,44 @@ class ModelComparison:
     def run_full_comparison(self):
         """Run the full comparison across portfolios, periods, and models"""
 
-        logger.info("="*70)
-        logger.info("BA TRADING SYSTEM - PORTFOLIO-BASED MODEL COMPARISON")
-        logger.info("="*70)
-        print("\n" + "="*70)
-        print("BA TRADING SYSTEM - PORTFOLIO-BASED MODEL COMPARISON")
-        print("="*70)
-
         ffc_runs_enabled = bool(self.config.get("training.ffc_runs", False))
-        if not ffc_runs_enabled:
-            logger.info("FFC runs are disabled (training.ffc_runs=false)")
-            print("\nFFC factor runs are disabled (training.ffc_runs=false)")
 
         # 1. Fetch data (portfolio based)
-        logger.info("[STEP 1/5] DATA FETCH")
-        print("\n[STEP 1/5] DATA FETCH")
         grabber = DataGrabber(self.config.path)
         all_data = grabber.fetch_all_data()  # {"dax": {"daily": df, "intraday": df}, "sdax": {...}}
 
         # 2. Fetch company data (for FFC factors)
-        logger.info("[STEP 2/5] COMPANY DATA FETCH")
-        print("\n[STEP 2/5] COMPANY DATA FETCH")
         all_company_data = grabber.fetch_company_data()  # {"dax": df, "sdax": df}
 
         # 3. Data prep
         prep = DataPrep(self.config.path)
 
         # For each portfolio
-        portfolios_iter = tqdm(all_data.items(), desc="Portfolios", leave=True)
-        for portfolio_name, portfolio_data in portfolios_iter:
+        for portfolio_name, portfolio_data in all_data.items():
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
             portfolio_display_name = portfolio_config.get("name", portfolio_name.upper())
             
             # Pull company data for this portfolio
             company_df = all_company_data.get(portfolio_name, pd.DataFrame())
             
-            logger.debug(f"Company data for portfolio '{portfolio_name}': Type={type(company_df)}, Empty={company_df.empty if isinstance(company_df, pd.DataFrame) else 'N/A'}, Shape={company_df.shape if isinstance(company_df, pd.DataFrame) else 'N/A'}")
-            
             if not isinstance(company_df, pd.DataFrame):
-                logger.warning(f"Company data for portfolio '{portfolio_name}' is not a DataFrame: {type(company_df)}")
-                print(f"  WARNING: Company data for portfolio '{portfolio_name}' is not a DataFrame!")
                 company_df = pd.DataFrame()
-            
-            if company_df.empty:
-                logger.warning(f"No company data found for portfolio '{portfolio_name}'")
-                print(f"  WARNING: No company data found for portfolio '{portfolio_name}'")
-                print("     FFC factors cannot be calculated - only runs without FFC will be executed")
-                logger.debug(f"all_company_data Keys: {list(all_company_data.keys())}")
-                logger.debug(f"all_company_data Types: {[(k, type(v)) for k, v in all_company_data.items()]}")
-            else:
-                logger.info(f"Company data for portfolio '{portfolio_name}' available: {company_df.shape}")
-                print(f"  Company data available: {company_df.shape}")
-                logger.debug(f"Company data columns: {list(company_df.columns)[:10]}")
-                logger.debug(f"Company data index type: {type(company_df.index)}")
-                if 'Date' in company_df.columns:
-                    logger.debug(f"Company data date range: {pd.to_datetime(company_df['Date'], errors='coerce').min()} to {pd.to_datetime(company_df['Date'], errors='coerce').max()}")
 
             # For both periods
-            periods_iter = tqdm(portfolio_data.items(), desc=f"{portfolio_display_name} periods", leave=False)
-            for period_type, data in periods_iter:
-                print("\n" + "="*70)
-                print(f"TRAINING: {portfolio_display_name} - {period_type.upper()}")
-                print("="*70)
-
+            for period_type, data in portfolio_data.items():
                 # Calculate FFC factors if company data is available
                 ff_factors = None
                 if not company_df.empty:
-                    logger.info("Calculating Fama-French/Carhart factors...")
-                    print("  Calculating FFC factors...")
-                    logger.debug(f"Company data shape: {company_df.shape}, Columns: {list(company_df.columns)}")
-                    logger.debug(f"Price data shape: {data.shape}, Index type: {type(data.index)}")
-                    
                     if period_type == "intraday":
                         data_daily = data.copy()
                         if isinstance(data_daily.index, pd.DatetimeIndex):
                             data_daily.index = data_daily.index.normalize()
                         data_daily = data_daily.groupby(data_daily.index).first()
                         
-                        logger.debug(f"Daily data for FFC calculation: {data_daily.shape}")
-                        
                         ff_model = FamaFrenchFactorModel(self.config.path)
                         portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
                         index_col = f"{portfolio_config.get('index', '.GDAXI')}_TRDPRC_1"
-                        
-                        logger.debug(f"Index column for FFC: {index_col}")
-                        logger.debug(f"Available columns in data_daily: {list(data_daily.columns)[:10]}...")
-                        
+
                         ff_factors_daily = ff_model.calculate_factors(
                             price_df=data_daily,
                             company_df=company_df,
@@ -147,57 +93,29 @@ class ModelComparison:
                                 date_normalized = date.normalize()
                                 if date_normalized in ff_factors_daily.index:
                                     ff_factors.loc[date] = ff_factors_daily.loc[date_normalized]
-                            logger.debug(f"Expanded FFC factors to intraday: {ff_factors.shape}")
                     else:
                         ff_model = FamaFrenchFactorModel(self.config.path)
                         portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
                         index_col = f"{portfolio_config.get('index', '.GDAXI')}_TRDPRC_1"
-                        
-                        logger.debug(f"Index column for FFC: {index_col}")
-                        logger.debug(f"Available columns in data: {list(data.columns)[:10]}...")
-                        
+
                         ff_factors = ff_model.calculate_factors(
                             price_df=data,
                             company_df=company_df,
                             index_col=index_col,
                             portfolio_name=portfolio_name
                         )
-                    
-                    if ff_factors is not None and not ff_factors.empty:
-                        logger.info(f"FFC factors calculated: {ff_factors.shape}")
-                        print(f"  FFC factors calculated: {ff_factors.shape}")
-                        logger.debug(f"FFC factor columns: {list(ff_factors.columns)}")
-                        logger.debug(f"FFC factors head:\n{ff_factors.head()}")
-                    else:
-                        logger.warning("FFC factors could not be calculated (empty or None)")
-                        print("  FFC factors could not be calculated (empty or None)")
-                        logger.debug(f"ff_factors Type: {type(ff_factors)}, Empty: {ff_factors.empty if isinstance(ff_factors, pd.DataFrame) else 'N/A'}")
-                        if isinstance(ff_factors, pd.DataFrame):
-                            logger.debug(f"ff_factors Shape: {ff_factors.shape}")
+                    if ff_factors is None or ff_factors.empty:
                         ff_factors = None
-                else:
-                    logger.warning(f"Company data is empty for portfolio '{portfolio_name}' - FFC factors cannot be calculated")
-                    print("  Company data is empty - FFC factors cannot be calculated")
 
                 # Train models: once without FFC, optionally with FFC
                 use_ffc_options = [False, True] if ffc_runs_enabled else [False]
                 for use_ffc in use_ffc_options:
                     if use_ffc and (ff_factors is None or ff_factors.empty):
-                        logger.warning(f"Skip FFC run for {portfolio_name}_{period_type} - no FFC data available")
-                        print(f"\n{'='*70}")
-                        print("FEATURES: WITH FFC factors")
-                        print(f"{'='*70}")
-                        print("  Skipping FFC run - no FFC data available")
-                        print(f"     Reason: ff_factors is {'None' if ff_factors is None else 'empty'}")
                         continue
                     
                     suffix = "_FFC" if use_ffc else ""
                     results_key = f"{portfolio_name}_{period_type}{suffix}"
                     
-                    print(f"\n{'='*70}")
-                    print(f"FEATURES: {'WITH FFC factors' if use_ffc else 'WITHOUT FFC factors'}")
-                    print(f"{'='*70}")
-
                     # Prepare data (with or without FFC factors)
                     ff_factors_to_use = ff_factors if use_ffc else None
                     X, y = prep.prepare_data(
@@ -232,18 +150,12 @@ class ModelComparison:
                         index=X_test.index
                     )
 
-                    logger.info(f"Train Size: {len(X_train)} samples, Test Size: {len(X_test)} samples")
-                    print(f"\nTrain Size: {len(X_train)} samples")
-                    print(f"Test Size: {len(X_test)} samples")
-
                     # Trainiere alle Modelle
                     self.results[results_key] = self.train_all_models(
                         X_train, X_test, y_train, y_test, portfolio_name, period_type, use_ffc=use_ffc
                     )
 
         # 4. Build comparison
-        logger.info("[STEP 5/5] BUILD COMPARISON REPORT")
-        print("\n[STEP 5/5] BUILD COMPARISON REPORT")
         self.create_comparison_report()
 
     def train_all_models(
@@ -272,10 +184,6 @@ class ModelComparison:
         portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
         portfolio_display = portfolio_config.get("name", portfolio_name.upper())
 
-        logger.info(f"[STEP 2/4] FEATURE ENGINEERING COMPLETE")
-        logger.info(f"[STEP 3/4] MODEL TRAINING ({portfolio_display} - {period_type.upper()})")
-        print(f"\n[STEP 2/4] FEATURE ENGINEERING COMPLETE")
-        print(f"[STEP 3/4] MODEL TRAINING ({portfolio_display} - {period_type.upper()})")
 
         # Define model configurations
         model_configs = {
@@ -303,17 +211,6 @@ class ModelComparison:
                     "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
                     "portfolio_name": portfolio_name,
                     "period_type": period_type
-                }
-            },
-            "sklearn_nn": {
-                "enabled": self.config.get("models.sklearn_nn.enabled", False),
-                "train_func": train_sklearn_nn,
-                "display_name": "Sklearn Neural Network",
-                "get_kwargs": lambda: {
-                    "hidden_layer_sizes": tuple(self.config.get("models.sklearn_nn.hidden_layer_sizes", [64, 32])),
-                    "max_iter": self.config.get("models.sklearn_nn.max_iter", 500),
-                    "n_splits": self.config.get("training.cross_validation.n_splits", 5),
-                    "use_gridsearch": self.config.get("training.cross_validation.enabled", True)
                 }
             },
             "ols": {
@@ -347,14 +244,9 @@ class ModelComparison:
         active_models = self.config.get("models.active_models", [])
         active_models_set = set(active_models) if isinstance(active_models, (list, tuple, set)) else set()
 
-        if active_models_set:
-            logger.info(f"Using models.active_models filter: {sorted(active_models_set)}")
-            print(f"Active models from config: {sorted(active_models_set)}")
-
         # Train all models
         for model_name, config in model_configs.items():
             if model_name != "naive_baseline" and active_models_set and model_name not in active_models_set:
-                logger.info(f"Skipping {model_name} (not in models.active_models)")
                 continue
 
             if not config["enabled"]:
@@ -391,10 +283,6 @@ class ModelComparison:
             X_train, X_test, y_train, y_test: Train/test splits
             results: Dictionary to store results
         """
-        print(f"\n{'─'*60}")
-        print(config["display_name"])
-        print(f"{'─'*60}")
-
         start = time.time()
 
         kwargs = config.get("get_kwargs", lambda: {})()
@@ -427,23 +315,7 @@ class ModelComparison:
             model_name: Model name
             extra_info: Optional extra information
         """
-        print(f"  R² Test: {metrics['r2']:.4f}")
-        print(f"  MSE: {metrics['mse']:.6f}")
-        print(f"  MAE: {metrics['mae']:.6f}")
-        
-        # Additional metrics if present
-        if 'best_alpha' in metrics:
-            print(f"  Best Alpha: {metrics['best_alpha']}")
-        
-        print(f"  Training time: {training_time:.2f}s")
-
-        if extra_info:
-            print(f"  {extra_info}")
-
-        logger.info(
-            f"{model_name}: R²={metrics['r2']:.4f}, MSE={metrics['mse']:.6f}, "
-            f"MAE={metrics['mae']:.6f}, Time={training_time:.2f}s"
-        )
+        return
 
     def create_comparison_report(self):
         """Create detailed portfolio-based comparison report as Excel"""
@@ -494,8 +366,6 @@ class ModelComparison:
         df_comparison = pd.DataFrame(comparison_data)
 
         if df_comparison.empty:
-            logger.warning("No results to compare!")
-            print("No results to compare!")
             return
 
         # Pivots for better overview
@@ -532,40 +402,9 @@ class ModelComparison:
             pivot_mse.to_excel(writer, sheet_name='MSE_by_Portfolio_Period')
             pivot_portfolio.to_excel(writer, sheet_name='R2_Hierarchical')
 
-        print("\n" + "="*70)
-        print("COMPARISON COMPLETE")
-        print("="*70)
-        print("\nBest models by R² score:")
-        print("─"*70)
-
-        # Show best models per portfolio and period
-        for portfolio in df_comparison['Portfolio'].unique():
-            for period in df_comparison['Period'].unique():
-                subset = df_comparison[
-                    (df_comparison['Portfolio'] == portfolio) &
-                    (df_comparison['Period'] == period)
-                ]
-                if subset.empty:
-                    continue
-
-                best_idx = subset['R2_Test'].idxmax()
-                best_model = subset.loc[best_idx]
-
-                print(f"\n{portfolio} - {period.upper()}:")
-                print(f"  Best model: {best_model['Model']}")
-                print(f"  R² Test Score: {best_model['R2_Test']:.4f}")
-                print(f"  MSE: {best_model['MSE']:.6f}")
-                print(f"  Training time: {best_model['Training_Time_s']:.2f}s")
-
         # Save models
         if self.config.get("output.save_models"):
-            logger.info("Saving models...")
-            print("\nSaving models...")
             self.save_models()
-
-        logger.info(f"Results saved: {output_path}")
-        print(f"\nResults saved: {output_path}")
-        print("="*70 + "\n")
 
     def save_models(self):
         """Save all trained models (portfolio based)"""
@@ -600,8 +439,6 @@ class ModelComparison:
                     torch.save(model_results["model"], portfolio_period_path / f"{model_name}.pt")
                 else:
                     joblib.dump(model_results["model"], model_file)
-
-                print(f"  {results_key}/{model_name} saved")
 
 
 if __name__ == "__main__":

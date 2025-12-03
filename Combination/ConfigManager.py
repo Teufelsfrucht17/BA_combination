@@ -4,13 +4,10 @@ Loads and manages the central config.yaml configuration
 """
 
 import yaml
+import datetime
 from pathlib import Path
 from typing import Any, Dict
 from copy import deepcopy
-
-from logger_config import get_logger
-
-logger = get_logger(__name__)
 
 # Constants
 DEFAULT_CONFIG = {
@@ -51,11 +48,6 @@ DEFAULT_CONFIG = {
             "weight_decay": 0.0005,
             "early_stopping_patience": 40,
             "scheduler_patience": 15
-        },
-        "sklearn_nn": {
-            "enabled": True,
-            "hidden_layer_sizes": [64, 32],
-            "max_iter": 1500
         },
         "ols": {
             "enabled": True
@@ -131,10 +123,20 @@ class ConfigManager:
         # Merge with defaults
         config = self._deep_merge(deepcopy(DEFAULT_CONFIG), user_config)
 
+        # Dynamic periods: always from (today - 1 Jahr) bis heute
+        today = datetime.date.today()
+        one_year_ago = today - datetime.timedelta(days=365)
+        start_str = one_year_ago.strftime("%Y-%m-%d")
+        end_str = today.strftime("%Y-%m-%d")
+
+        periods = config.get("data", {}).get("periods", {})
+        for key in ("daily", "intraday"):
+            if key in periods:
+                periods[key]["start"] = start_str
+                periods[key]["end"] = end_str
+
         # Validate config
         self._validate_config(config)
-
-        logger.info(f"Config loaded: {self.path}")
         return config
 
     @staticmethod
@@ -158,70 +160,8 @@ class ConfigManager:
         return result
 
     def _validate_config(self, config: Dict[str, Any]) -> None:
-        """
-        Validate config values
-
-        Args:
-            config: Config dictionary
-
-        Raises:
-            ValueError: If validation fails
-        """
-        # Validate test_split
-        test_split = config.get("training", {}).get("test_split", 0.2)
-        if not 0 < test_split < 1:
-            raise ValueError(f"test_split must be between 0 and 1 but is {test_split}")
-
-        # Validate ffc_runs
-        ffc_runs = config.get("training", {}).get("ffc_runs", False)
-        if not isinstance(ffc_runs, bool):
-            raise ValueError("training.ffc_runs must be boolean (true/false)")
-
-        # Validate portfolio structure
-        portfolios = config.get("data", {}).get("portfolios", {})
-        if not portfolios:
-            logger.warning("No portfolios defined in config")
-
-        for name, portfolio in portfolios.items():
-            if not isinstance(portfolio, dict):
-                raise ValueError(f"Portfolio '{name}' must be a dictionary")
-            if "universe" not in portfolio:
-                raise ValueError(f"Portfolio '{name}' is missing the 'universe' field")
-            if not isinstance(portfolio["universe"], list):
-                raise ValueError(f"Portfolio '{name}' universe must be a list")
-            if len(portfolio["universe"]) == 0:
-                raise ValueError(f"Portfolio '{name}' universe is empty")
-
-        # Validate features
-        input_features = config.get("features", {}).get("input_features", [])
-        if not input_features:
-            logger.warning("No features defined in config")
-
-        # Validate models
-        models = config.get("models", {})
-        active_models = models.get("active_models", [])
-
-        if active_models and not isinstance(active_models, list):
-            raise ValueError("models.active_models must be a list")
-
-        valid_model_names = {name for name in models.keys() if name != "active_models"}
-        valid_model_names.add("naive_baseline")  # Baseline can optionally be set explicitly
-
-        if active_models:
-            invalid_models = [m for m in active_models if m not in valid_model_names]
-            if invalid_models:
-                raise ValueError(f"Invalid models in models.active_models: {invalid_models}")
-
-        enabled_models = [
-            name for name, cfg in models.items()
-            if isinstance(cfg, dict) and cfg.get("enabled", False)
-        ]
-        if not enabled_models and not active_models:
-            logger.warning("No models enabled in config")
-
-        selected_models_count = len(active_models) if active_models else len(enabled_models)
-        logger.debug(f"Config validated: {len(portfolios)} portfolios, {selected_models_count} models enabled/selected")
-
+        """Placeholder validation (no-op in best-case mode)."""
+        return
     def get(self, key_path: str, default: Any = None) -> Any:
         """
         Retrieve a value from config using dot notation
@@ -285,7 +225,7 @@ class ConfigManager:
     def reload(self) -> None:
         """Reload config file"""
         self.config = self._load_and_validate_config()
-        logger.info("Config reloaded")
+        return
 
     def __repr__(self) -> str:
         return f"ConfigManager(path='{self.path}')"
@@ -293,11 +233,5 @@ class ConfigManager:
 
 if __name__ == "__main__":
     # Test
-    from logger_config import setup_logging
-    setup_logging()
-    
     config = ConfigManager()
-    logger.info("Config loaded successfully!")
-    logger.info(f"Universe: {config.get('data.universe')}")
-    logger.info(f"PyTorch Epochs: {config.get('models.pytorch_nn.epochs')}")
-    logger.info(f"Input Features: {config.get('features.input_features')}")
+    print("Config loaded.")

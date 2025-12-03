@@ -12,9 +12,6 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 from ConfigManager import ConfigManager
-from logger_config import get_logger
-
-logger = get_logger(__name__)
 
 
 class FamaFrenchFactorModel:
@@ -23,7 +20,6 @@ class FamaFrenchFactorModel:
     def __init__(self, config_path: str = "config.yaml"):
         self.config = ConfigManager(config_path)
         self.risk_free_rate = self.config.get("features.risk_free_rate", 0.027)  # 2.7% default
-        logger.info(f"Fama-French model initialized (risk-free rate: {self.risk_free_rate*100:.2f}%)")
 
     # ----------------------------
     # Helper
@@ -87,16 +83,13 @@ class FamaFrenchFactorModel:
     ) -> pd.Series:
         """Sucht Index-Spalte, ansonsten Durchschnitt aller Aktienpreise."""
         if index_col in prices.columns:
-            logger.info(f"Using index column from config: {index_col}")
             return prices[index_col].clip(lower=1e-10)
 
         for col in prices.columns:
             col_str = str(col)
             if any(idx in col_str for idx in [".GDAXI", ".SDAXI"]):
-                logger.info(f"Using detected index column: {col}")
                 return prices[col].clip(lower=1e-10)
 
-        logger.info("Index column not found - using average stock price as market proxy.")
         return prices[stock_price_cols].mean(axis=1).clip(lower=1e-10)
 
     # ----------------------------
@@ -113,17 +106,11 @@ class FamaFrenchFactorModel:
         Calculate Fama-French/Carhart factors for a portfolio.
         Robust when fundamentals are missing: SMB/HML are set to 0.
         """
-        logger.info(f"Calculating Fama-French factors for portfolio: {portfolio_name}")
-
         prices = self._normalize_index(price_df)
         company = self._normalize_index(company_df)
 
-        logger.debug(f"Price columns: {list(prices.columns)[:10]} (total {len(prices.columns)})")
-        logger.debug(f"Company columns: {list(company.columns)[:10]} (total {len(company.columns)})")
-
         stock_price_cols = self._find_stock_price_columns(prices)
         if not stock_price_cols:
-            logger.warning("No stock price columns found - returning empty DataFrame.")
             return pd.DataFrame()
 
         price_matrix = prices[stock_price_cols].clip(lower=1e-10)
@@ -154,10 +141,6 @@ class FamaFrenchFactorModel:
         # Fill remaining NaNs conservatively with 0
         factors_df = factors_df.fillna(0)
 
-        logger.info(
-            f"Fama-French factors calculated: {len(factors_df)} data points "
-            f"(Index: {factors_df.index.min()} to {factors_df.index.max()})"
-        )
         return factors_df
 
     # ----------------------------
@@ -174,7 +157,6 @@ class FamaFrenchFactorModel:
         Compute SMB/HML; return 0 if fundamentals are missing.
         """
         if company_df is None or company_df.empty:
-            logger.info("No company data - SMB/HML set to 0.")
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
@@ -183,7 +165,6 @@ class FamaFrenchFactorModel:
         has_bv = any("BOOKVALUE" in col or "BVPS" in col for col in company_cols_upper)
 
         if not (has_mc and has_bv):
-            logger.info("Company data without market cap/book value - SMB/HML = 0.")
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
@@ -240,10 +221,8 @@ def calculate_fama_french_factors(
     """
     config = ConfigManager(config_path)
     portfolio_config = config.get(f"data.portfolios.{portfolio_name}")
-    if not portfolio_config:
-        raise ValueError(f"Portfolio '{portfolio_name}' not found in config")
 
-    index_name = portfolio_config.get("index", ".GDAXI")
+    index_name = (portfolio_config.get("index") if portfolio_config else None) or ".GDAXI"
     index_col = f"{index_name}_TRDPRC_1"  # Standard format
 
     model = FamaFrenchFactorModel(config_path)
@@ -256,7 +235,4 @@ def calculate_fama_french_factors(
 
 
 if __name__ == "__main__":
-    from logger_config import setup_logging
-
-    setup_logging()
-    print("FamaFrench.py - Test")
+    model = FamaFrenchFactorModel()

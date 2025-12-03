@@ -13,7 +13,6 @@ from typing import Tuple, Dict, Any, Optional, Union, List
 # Sklearn models
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.neural_network import MLPRegressor
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
@@ -23,12 +22,6 @@ from sklearn.pipeline import Pipeline
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
-
-from logger_config import get_logger
-
-logger = get_logger(__name__)
-
-from tqdm import tqdm
 
 # Constants
 DEFAULT_RANDOM_SEED = 42
@@ -124,7 +117,6 @@ def train_pytorch_model(
         torch.cuda.manual_seed(DEFAULT_RANDOM_SEED)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        logger.debug("CUDA available, using GPU")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -145,7 +137,6 @@ def train_pytorch_model(
     y_mean = y_train_inner.mean()
     y_std = y_train_inner.std()
     if y_std.item() < DEFAULT_EPSILON:
-        logger.warning("Sehr kleine Standardabweichung im Target, setze auf 1.0")
         y_std = torch.tensor(1.0)
 
     if standardize_target:
@@ -156,8 +147,6 @@ def train_pytorch_model(
         y_val_std = y_val
 
     # Internal validation split (chronological)
-    print(f"    Inner Train Size: {len(X_train_inner)}, Val Size: {len(X_val)}")
-
     # DataLoader (no shuffle for time series)
     train_dataset = TensorDataset(X_train_inner, y_train_inner_std)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
@@ -186,8 +175,7 @@ def train_pytorch_model(
 
     # Training Loop
     model.train()
-    epochs_iter = tqdm(range(epochs), desc="Training", leave=False)
-    for epoch in epochs_iter:
+    for epoch in range(epochs):
         epoch_loss = 0.0
 
         # Training
@@ -228,15 +216,8 @@ def train_pytorch_model(
             patience_counter += 1
 
         # Print Progress
-        if (epoch + 1) % DEFAULT_EPOCH_PRINT_INTERVAL == 0:
-            current_lr = optimizer.param_groups[0]['lr']
-            print(f"    Epoch {epoch+1}/{epochs}, Train Loss: {avg_train_loss:.6f}, "
-                  f"Val Loss: {val_loss:.6f}, LR: {current_lr:.6f}")
-
         # Early Stopping
         if patience_counter >= early_stopping_patience:
-            logger.info(f"Early stopping at epoch {epoch+1} (best val loss: {best_val_loss:.6f})")
-            print(f"    Early stopping at epoch {epoch+1} (best val loss: {best_val_loss:.6f})")
             break
 
     # Load best model
@@ -288,135 +269,6 @@ def train_pytorch_model(
 
     return model, metrics
 
-
-# ============================================
-# Sklearn Neural Network
-# ============================================
-
-def train_sklearn_nn(
-    X_train: Union[pd.DataFrame, np.ndarray],
-    y_train: Union[pd.Series, np.ndarray],
-    X_test: Union[pd.DataFrame, np.ndarray],
-    y_test: Union[pd.Series, np.ndarray],
-    hidden_layer_sizes: Tuple[int, ...] = (64, 32),
-    max_iter: int = 1000,
-    n_splits: int = 5,
-    use_gridsearch: bool = True
-) -> Tuple[MLPRegressor, Dict[str, Any]]:
-    """
-    Train an sklearn MLPRegressor with optional hyperparameter tuning.
-
-    Note: scaling happens in ModelComparison.py; do not re-scale here to avoid leakage.
-
-    Args:
-        X_train: Scaled training features
-        y_train: Training target
-        X_test: Scaled test features
-        y_test: Test target
-        hidden_layer_sizes: Layer sizes (default: (64, 32))
-        max_iter: Max iterations
-        n_splits: Splits for TimeSeriesSplit
-        use_gridsearch: Whether to run GridSearchCV
-
-    Returns:
-        model: Trained MLPRegressor
-        metrics: Dict with r2, mse, mae, train_r2, directional_accuracy, etc.
-    """
-    base_layers = tuple(hidden_layer_sizes)
-
-    def scale_layers(factor: float):
-        return tuple(max(1, int(round(h * factor))) for h in base_layers)
-
-    candidate_layers = [base_layers, scale_layers(0.5), scale_layers(1.5)]
-    # Remove duplicates when layer sizes collapse to same values
-    candidate_layers = list(dict.fromkeys(candidate_layers))
-
-    if use_gridsearch:
-        # Hyperparameter grid near configured values
-        param_grid = {
-            'hidden_layer_sizes': candidate_layers,
-            'alpha': [0.0001, 0.001, 0.01],
-            'learning_rate_init': [0.001, 0.01]
-        }
-
-        mlp = MLPRegressor(
-            activation='relu',
-            solver='adam',
-            learning_rate='adaptive',
-            max_iter=max_iter,
-            early_stopping=True,
-            n_iter_no_change=25,
-            random_state=42,
-            verbose=False
-        )
-
-        tscv = TimeSeriesSplit(n_splits=n_splits)
-
-        print(f"    Starte GridSearch mit {n_splits} TimeSeriesSplit-Folds...")
-
-        grid = GridSearchCV(
-            mlp,
-            param_grid=param_grid,
-            cv=tscv,
-            scoring='r2',
-            n_jobs=-1,
-            verbose=0
-        )
-
-        grid.fit(X_train, y_train)
-
-        print(f"    Beste Parameter: {grid.best_params_}")
-        print(f"    Bester CV R² Score: {grid.best_score_:.4f}")
-
-        model = grid.best_estimator_
-
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        metrics = {
-            'r2': r2_score(y_test, y_test_pred),
-            'mse': mean_squared_error(y_test, y_test_pred),
-            'mae': mean_absolute_error(y_test, y_test_pred),
-            'train_r2': r2_score(y_train, y_train_pred),
-            'directional_accuracy': directional_accuracy(y_test, y_test_pred),
-            'directional_accuracy_train': directional_accuracy(y_train, y_train_pred),
-            'best_params': grid.best_params_,
-            'cv_best_score': grid.best_score_
-        }
-
-    else:
-        # Modell OHNE Scaling-Pipeline (Daten sind bereits skaliert)
-        model = MLPRegressor(
-            hidden_layer_sizes=base_layers,
-            activation='relu',
-            solver='adam',
-            learning_rate='adaptive',
-            learning_rate_init=0.001,
-            alpha=0.0001,
-            max_iter=max_iter,
-            early_stopping=True,
-            n_iter_no_change=25,
-            random_state=42,
-            verbose=False
-        )
-
-        # Trainiere
-        model.fit(X_train, y_train)
-
-        # Predict
-        y_train_pred = model.predict(X_train)
-        y_test_pred = model.predict(X_test)
-
-        metrics = {
-            'r2': r2_score(y_test, y_test_pred),
-            'mse': mean_squared_error(y_test, y_test_pred),
-            'mae': mean_absolute_error(y_test, y_test_pred),
-            'train_r2': r2_score(y_train, y_train_pred),
-            'directional_accuracy': directional_accuracy(y_test, y_test_pred),
-            'directional_accuracy_train': directional_accuracy(y_train, y_train_pred),
-        }
-
-    return model, metrics
 
 
 # ============================================
@@ -532,8 +384,6 @@ def train_random_forest(
         rf = RandomForestRegressor(random_state=42, n_jobs=-1)
         tscv = TimeSeriesSplit(n_splits=n_splits)
 
-        print(f"    Starting GridSearch with {n_splits} TimeSeriesSplit folds...")
-
         grid = GridSearchCV(
             rf,
             param_grid=param_grid,
@@ -544,9 +394,6 @@ def train_random_forest(
         )
 
         grid.fit(X_train, y_train)
-
-        print(f"    Best params: {grid.best_params_}")
-        print(f"    Best CV R² score: {grid.best_score_:.4f}")
 
         model = grid.best_estimator_
 
@@ -623,24 +470,4 @@ def train_naive_baseline(
 
 
 if __name__ == "__main__":
-    # Test
-    print("Models Wrapper Test")
-
-    # Create test data
-    np.random.seed(42)
-    X_train = pd.DataFrame(np.random.randn(100, 5), columns=[f'feature_{i}' for i in range(5)])
-    y_train = pd.Series(np.random.randn(100))
-    X_test = pd.DataFrame(np.random.randn(20, 5), columns=[f'feature_{i}' for i in range(5)])
-    y_test = pd.Series(np.random.randn(20))
-
-    # Test OLS
-    print("\nTest OLS...")
-    model, metrics = train_ols(X_train, y_train, X_test, y_test)
-    print(f"R²: {metrics['r2']:.4f}, MSE: {metrics['mse']:.6f}")
-
-    # Test Ridge
-    print("\nTest Ridge...")
-    model, metrics = train_ridge(X_train, y_train, X_test, y_test)
-    print(f"R²: {metrics['r2']:.4f}, MSE: {metrics['mse']:.6f}, Best Alpha: {metrics['best_alpha']}")
-
-    print("\nModels Wrapper working!")
+    nn.Module()

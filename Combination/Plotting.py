@@ -21,19 +21,11 @@ Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
 import pandas as pd
 
-try:
-    import matplotlib
+import matplotlib
 
-    # Use a non-interactive backend to avoid display requirements on servers
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-except ImportError:  # pragma: no cover - optional dependency
-    matplotlib = None
-    plt = None
-
-from logger_config import get_logger
-
-logger = get_logger(__name__)
+# Use a non-interactive backend to avoid display requirements on servers
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 DataContainer = Union[pd.DataFrame, Dict[str, Any]]
 PREFERRED_PRICE_FIELDS: List[str] = ["TRDPRC_1", "OPEN_PRC", "CLOSE_PRC"]
@@ -81,20 +73,18 @@ def _flatten_data(data: DataContainer, prefix: str) -> Iterable[Tuple[str, pd.Da
     elif isinstance(data, pd.DataFrame):
         yield prefix, data
     else:
-        logger.warning("Skipping unsupported data type '%s' for prefix '%s'", type(data), prefix)
+        return
 
 
 def _plot_single_dataframe(df: pd.DataFrame, plot_name: str, output_dir: Path) -> None:
     """Create line plot and boxplot for a single DataFrame."""
     if matplotlib is None or plt is None:
-        logger.warning("matplotlib not installed - cannot plot '%s'", plot_name)
         return
 
     numeric_df = df.select_dtypes(include=["number"]).copy()
     numeric_df = numeric_df.dropna(how="all")
 
     if numeric_df.empty:
-        logger.warning("No numeric data to plot for '%s'", plot_name)
         return
 
     numeric_df.sort_index(inplace=True)
@@ -126,8 +116,6 @@ def _plot_single_dataframe(df: pd.DataFrame, plot_name: str, output_dir: Path) -
     fig.savefig(box_path)
     plt.close(fig)
 
-    logger.info("Saved plots for '%s' to %s", plot_name, output_dir)
-
 
 def _load_prices_from_excel(
     excel_path: Path,
@@ -143,7 +131,6 @@ def _load_prices_from_excel(
     preferred_fields = preferred_fields or PREFERRED_PRICE_FIELDS
     exclude_fields = set((exclude_fields or []))
     if not excel_path.exists():
-        logger.warning("Excel file not found: %s", excel_path)
         return pd.DataFrame()
 
     xls = pd.ExcelFile(excel_path)
@@ -189,7 +176,6 @@ def _load_prices_from_excel(
         series_by_instrument[series.name] = (priority, series)
 
     if not series_by_instrument:
-        logger.warning("No price series found in %s", excel_path)
         return pd.DataFrame()
 
     combined = pd.concat([item[1] for item in series_by_instrument.values()], axis=1)
@@ -227,14 +213,14 @@ def plot_datastorage_price_development(
             exclude_fields=["TRDPRC_1"],
         )
         if df_main.empty:
-            logger.warning("Skipping plot for %s (no data)", name)
+            continue
         else:
             plot_data_overview(df_main, dataset_name=f"{name}_no_trdprc1", output_dir=output_dir)
 
         # Separate TRDPRC_1-only plots
         df_trd = _load_prices_from_excel(path, preferred_fields=["TRDPRC_1"])
         if df_trd.empty:
-            logger.warning("Skipping TRDPRC_1 plot for %s (no data)", name)
+            continue
         else:
             trd_dir = Path(output_dir) / "trdprc1_only"
             plot_data_overview(df_trd, dataset_name=f"{name}_trdprc1", output_dir=trd_dir)

@@ -9,9 +9,6 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Optional, List
 from ConfigManager import ConfigManager
-from logger_config import get_logger
-
-logger = get_logger(__name__)
 
 # Constants
 DEFAULT_MIN_TRAIN_SIZE = 50
@@ -27,7 +24,6 @@ AVAILABLE_FEATURES = {
     'portfolio_index_change', 'change_dax', 'change_sdax',
     'vdax_absolute', 'volume_ratio',
     'rolling_volatility_10', 'rolling_volatility_20',
-    'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos',
     'rsi_14',
     # Fama-French/Carhart factors
     'Mkt_Rf', 'SMB', 'HML', 'WML'
@@ -64,53 +60,12 @@ class DataPrep:
         Returns:
             Tuple of (X, y) - features and target
 
-        Raises:
-            ValueError: If data are empty or invalid
         """
-        # Validation
-        if df.empty:
-            raise ValueError("DataFrame is empty!")
-        
-        if len(df) < DEFAULT_WARNING_DATASET_SIZE:
-            logger.warning("Very small dataset: %d rows", len(df))
-
-        # Check for missing values
-        missing_pct = df.isnull().sum().sum() / (len(df) * len(df.columns)) * 100
-        if missing_pct > DEFAULT_MISSING_VALUES_ERROR_THRESHOLD:
-            raise ValueError(f"Too many missing values: {missing_pct:.1f}%")
-        elif missing_pct > DEFAULT_MISSING_VALUES_WARNING_THRESHOLD:
-            logger.warning("Many missing values: %.1f%%", missing_pct)
-
-        # Check for duplicate index entries
-        if df.index.duplicated().any():
-            logger.warning("Duplicates found in index, removing them...")
-            df = df[~df.index.duplicated(keep='first')]
-
-        portfolio_label = portfolio_name.upper() if portfolio_name else "UNKNOWN"
-        logger.info("="*60)
-        logger.info(f"DATENAUFBEREITUNG - {portfolio_label} {period_type.upper()}")
-        logger.info("="*60)
-        print(f"\n{'='*60}")
-        print(f"DATA PREPARATION - {portfolio_label} {period_type.upper()}")
-        print(f"{'='*60}")
-
         # Feature engineering
-        logger.info("Creating features...")
-        print("Creating features...")
         features_df = self.create_features(df, portfolio_name=portfolio_name, ff_factors=ff_factors, period_type=period_type)
-        logger.info(f"Features created: {features_df.shape}")
-        print(f"  Features created: {features_df.shape}")
 
         # Build X and y based on config
-        logger.info("Creating X and y...")
-        print("Creating X and y...")
         X, y = self.create_xy(features_df, portfolio_name=portfolio_name)
-        logger.info(f"X Shape: {X.shape}, y Shape: {y.shape}")
-        print(f"  X Shape: {X.shape}")
-        print(f"  y Shape: {y.shape}")
-
-        logger.info("="*60)
-        print(f"{'='*60}\n")
         return X, y
 
     def create_features(
@@ -249,24 +204,12 @@ class DataPrep:
             if isinstance(dt_index, pd.PeriodIndex):
                 dt_index = dt_index.to_timestamp()
     
-            dow = dt_index.weekday
-            features['day_of_week'] = dow
-            # Cyclical encoding
-            features['dow_sin'] = np.sin(2 * np.pi * dow / 7)
-            features['dow_cos'] = np.cos(2 * np.pi * dow / 7)
-
-            hours = dt_index.hour
-            features['hour_of_day'] = hours
-            features['hour_sin'] = np.sin(2 * np.pi * hours / 24)
-            features['hour_cos'] = np.cos(2 * np.pi * hours / 24)
+            features['day_of_week'] = dt_index.weekday
+            features['hour_of_day'] = dt_index.hour
         else:
             # Fallback: no time features
             features['day_of_week'] = 0
-            features['dow_sin'] = 0
-            features['dow_cos'] = 0
             features['hour_of_day'] = 0
-            features['hour_sin'] = 0
-            features['hour_cos'] = 0
 
         # Drop NaN rows and initial window effects
         drop_n = 0
@@ -324,11 +267,6 @@ class DataPrep:
                     for col in ['Mkt_Rf', 'SMB', 'HML', 'WML']:
                         if col in ff_factors.columns:
                             features[col] = ff_factors[col]
-                
-                logger.info("FFC factors added: Mkt_Rf, SMB, HML, WML")
-            else:
-                logger.warning("FFC factors could not be aligned (index issue)")
-
         # ==========================================
         # Optional classification target
         # ==========================================
@@ -378,30 +316,12 @@ class DataPrep:
         input_features = self.config.get("features.input_features", [])
         target = self.config.get("features.target", "price_change_next")
 
-        # Validate features
-        invalid_features = set(input_features) - AVAILABLE_FEATURES
-        if invalid_features:
-            logger.warning(
-                "Unknown features in config: %s. Available: %s",
-                invalid_features, sorted(AVAILABLE_FEATURES)
-            )
-
         # Filter only enabled and available features
         available_features = [f for f in input_features if f in features_df.columns]
         missing_features = set(input_features) - set(available_features)
 
-        if missing_features:
-            logger.warning("Features in config but not available: %s", missing_features)
-
         if len(available_features) == 0:
-            error_msg = (
-                f"No features found!\n"
-                f"Requested: {input_features}\n"
-                f"Available: {list(features_df.columns)}\n"
-                f"Allowed features: {sorted(AVAILABLE_FEATURES)}"
-            )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            available_features = list(features_df.columns)
 
         # Build X and y
         X = features_df[available_features].copy()
@@ -435,32 +355,13 @@ def time_series_split(
     Returns:
         Tuple of (X_train, X_test, y_train, y_test)
 
-    Raises:
-        ValueError: If there are not enough samples for a meaningful split
     """
     n_samples = len(X)
-
-    # Ensure data exists
-    if n_samples == 0:
-        raise ValueError("No data points available.")
 
     # Compute split index
     split_idx = int(n_samples * (1 - test_size))
     n_train = split_idx
     n_test = n_samples - split_idx
-
-    # Validate split sizes
-    if n_train < min_train_size:
-        raise ValueError(
-            f"Training set too small: {n_train} samples (minimum: {min_train_size}). "
-            f"Reduce test_size or increase the data size."
-        )
-
-    if n_test < min_test_size:
-        raise ValueError(
-            f"Test set too small: {n_test} samples (minimum: {min_test_size}). "
-            f"Increase test_size or add more data."
-        )
 
     # Perform split
     X_train = X.iloc[:split_idx]
@@ -468,41 +369,8 @@ def time_series_split(
     y_train = y.iloc[:split_idx]
     y_test = y.iloc[split_idx:]
 
-    # Warn for very small datasets
-    if n_samples < DEFAULT_WARNING_DATASET_SIZE:
-        logger.warning(
-            "Very small dataset (%d samples). Results may not be meaningful.",
-            n_samples
-        )
-        print(f"Warning: Very small dataset ({n_samples} samples). Results may not be meaningful.")
-
-    logger.debug(
-        "Time Series Split: Train=%d, Test=%d (test_size=%.2f)",
-        n_train, n_test, test_size
-    )
-
     return X_train, X_test, y_train, y_test
 
 
 if __name__ == "__main__":
-    # Test
-    print("DataPrep Test")
-
-    # Erstelle Test-Daten
-    dates = pd.date_range('2020-01-01', periods=1000, freq='D')
-    test_df = pd.DataFrame({
-        'SAP.DE_TRDPRC_1': np.random.randn(1000).cumsum() + 100,
-        'SIE.DE_TRDPRC_1': np.random.randn(1000).cumsum() + 80,
-        'SAP.DE_VOLUME': np.random.randint(1000, 10000, 1000),
-        'SIE.DE_VOLUME': np.random.randint(1000, 10000, 1000),
-        '.GDAXI_TRDPRC_1': np.random.randn(1000).cumsum() + 15000,
-        '.V1XI_TRDPRC_1': np.abs(np.random.randn(1000)) * 20,
-    }, index=dates)
-
     prep = DataPrep()
-    X, y = prep.prepare_data(test_df, "daily")
-
-    print(f"\nX Shape: {X.shape}")
-    print(f"y Shape: {y.shape}")
-    print(f"\nX columns: {list(X.columns)}")
-    print(f"\nFirst 5 rows of X:\n{X.head()}")

@@ -38,16 +38,7 @@ data:
     - "TRDPRC_1"
     - "ACVOL_1"
 
-  periods:
-    daily:
-      interval: "daily"
-      start: "2024-01-01"
-      end: "2025-11-15"
 
-    intraday:
-      interval: "30min"
-      start: "2024-01-01"
-      end: "2025-11-15"
 
 features:
   # Risk-free rate for Fama-French/Carhart models (decimal: 2.7% = 0.027)
@@ -64,10 +55,6 @@ features:
     - volume_ratio   # Volume ratio
     - rolling_volatility_10   # Volatility over 10 periods
     - rolling_volatility_20   # Volatility over 20 periods
-    - hour_sin       # Intraday: cyclic hour (sine)
-    - hour_cos       # Intraday: cyclic hour (cosine)
-    - dow_sin        # Day of week (sine)
-    - dow_cos        # Day of week (cosine)
 
   # Target variable
   target: "price_change_next"
@@ -79,8 +66,8 @@ features:
 
 models:
   # Optional: run only selected models (empty uses enabled flags)
-  active_models: ["pytorch_nn", "sklearn_nn", "ols", "ridge"]
-  # ["pytorch_nn", "sklearn_nn", "ols", "ridge", "random_forest"]
+  active_models: ["pytorch_nn", "ols", "ridge"]
+  # ["pytorch_nn", "ols", "ridge", "random_forest"]
 
   # Model settings
   pytorch_nn:
@@ -94,11 +81,6 @@ models:
     weight_decay: 0.0005
     early_stopping_patience: 40
     scheduler_patience: 15
-
-  sklearn_nn:
-    enabled: true
-    hidden_layer_sizes: [64, 32]
-    max_iter: 1500
 
   ols:
     enabled: true
