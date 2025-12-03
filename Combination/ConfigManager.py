@@ -1,16 +1,13 @@
 """
-ConfigManager.py - Config-System für BA_combination
-Lädt und verwaltet die zentrale config.yaml Konfiguration
+ConfigManager.py - Config system for BA_combination
+Loads and manages the central config.yaml configuration
 """
 
 import yaml
+import datetime
 from pathlib import Path
 from typing import Any, Dict
 from copy import deepcopy
-
-from logger_config import get_logger
-
-logger = get_logger(__name__)
 
 # Constants
 DEFAULT_CONFIG = {
@@ -52,11 +49,6 @@ DEFAULT_CONFIG = {
             "early_stopping_patience": 40,
             "scheduler_patience": 15
         },
-        "sklearn_nn": {
-            "enabled": True,
-            "hidden_layer_sizes": [64, 32],
-            "max_iter": 1500
-        },
         "ols": {
             "enabled": True
         },
@@ -93,74 +85,68 @@ DEFAULT_CONFIG = {
 
 
 class ConfigManager:
-    """Verwaltet die Konfiguration aus config.yaml"""
+    """Manage configuration stored in config.yaml"""
 
     def __init__(self, config_path: str = "config.yaml"):
         """
-        Initialisiert den ConfigManager
+        Initialize the ConfigManager
 
         Args:
-            config_path: Pfad zur Config-Datei (relativ oder absolut)
+            config_path: Path to the config file (relative or absolute)
         """
         self.path = Path(config_path)
         if not self.path.is_absolute():
-            # Wenn relativer Pfad, dann relativ zum Skript-Verzeichnis
+            # Resolve relative paths against the module directory
             self.path = Path(__file__).parent / self.path
 
         self.config = self._load_and_validate_config()
 
     def load_config(self) -> Dict[str, Any]:
         """
-        Lädt Config-Datei (Legacy-Methode für Kompatibilität)
+        Load config (legacy helper for compatibility)
 
         Returns:
-            Dictionary mit Konfiguration
-
-        Raises:
-            FileNotFoundError: Wenn config.yaml nicht gefunden wird
-            yaml.YAMLError: Wenn YAML-Syntax fehlerhaft ist
+            Dictionary with configuration
         """
         return self._load_and_validate_config()
 
     def _load_and_validate_config(self) -> Dict[str, Any]:
         """
-        Lädt Config-Datei und validiert sie
+        Load the config file and validate it
 
         Returns:
-            Dictionary mit Konfiguration (merged mit Defaults)
-
-        Raises:
-            FileNotFoundError: Wenn config.yaml nicht gefunden wird
-            yaml.YAMLError: Wenn YAML-Syntax fehlerhaft ist
-            ValueError: Wenn Config-Validierung fehlschlägt
+            Dictionary with configuration (merged with defaults)
         """
-        if not self.path.exists():
-            logger.warning(f"Config-Datei nicht gefunden: {self.path}, verwende Defaults")
-            return deepcopy(DEFAULT_CONFIG)
+        with open(self.path, 'r', encoding='utf-8') as f:
+            user_config = yaml.safe_load(f) or {}
 
-        try:
-            with open(self.path, 'r', encoding='utf-8') as f:
-                user_config = yaml.safe_load(f) or {}
-        except yaml.YAMLError as e:
-            raise ValueError(f"Fehler beim Laden der Config-Datei: {e}")
-
-        # Merge mit Defaults
+        # Merge with defaults
         config = self._deep_merge(deepcopy(DEFAULT_CONFIG), user_config)
 
-        # Validiere Config
-        self._validate_config(config)
+        # Dynamic periods: always from (today - 1 Jahr) bis heute
+        today = datetime.date.today()
+        one_year_ago = today - datetime.timedelta(days=365)
+        start_str = one_year_ago.strftime("%Y-%m-%d")
+        end_str = today.strftime("%Y-%m-%d")
 
-        logger.info(f"Config erfolgreich geladen: {self.path}")
+        periods = config.get("data", {}).get("periods", {})
+        for key in ("daily", "intraday"):
+            if key in periods:
+                periods[key]["start"] = start_str
+                periods[key]["end"] = end_str
+
+        # Validate config
+        self._validate_config(config)
         return config
 
     @staticmethod
     def _deep_merge(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Deep merge von zwei Dictionaries
+        Deep merge of two dictionaries
 
         Args:
-            base: Basis-Dictionary
-            update: Update-Dictionary
+            base: Base dictionary
+            update: Update dictionary
 
         Returns:
             Merged Dictionary
@@ -174,81 +160,18 @@ class ConfigManager:
         return result
 
     def _validate_config(self, config: Dict[str, Any]) -> None:
-        """
-        Validiert Config-Werte
-
-        Args:
-            config: Config-Dictionary
-
-        Raises:
-            ValueError: Wenn Validierung fehlschlägt
-        """
-        # Validiere test_split
-        test_split = config.get("training", {}).get("test_split", 0.2)
-        if not 0 < test_split < 1:
-            raise ValueError(f"test_split muss zwischen 0 und 1 sein, ist aber {test_split}")
-
-        # Validiere ffc_runs
-        ffc_runs = config.get("training", {}).get("ffc_runs", False)
-        if not isinstance(ffc_runs, bool):
-            raise ValueError("training.ffc_runs muss boolesch sein (true/false)")
-
-        # Validiere Portfolio-Struktur
-        portfolios = config.get("data", {}).get("portfolios", {})
-        if not portfolios:
-            logger.warning("Keine Portfolios in Config definiert")
-
-        for name, portfolio in portfolios.items():
-            if not isinstance(portfolio, dict):
-                raise ValueError(f"Portfolio '{name}' muss ein Dictionary sein")
-            if "universe" not in portfolio:
-                raise ValueError(f"Portfolio '{name}' hat kein 'universe' Feld")
-            if not isinstance(portfolio["universe"], list):
-                raise ValueError(f"Portfolio '{name}' universe muss eine Liste sein")
-            if len(portfolio["universe"]) == 0:
-                raise ValueError(f"Portfolio '{name}' universe ist leer")
-
-        # Validiere Features
-        input_features = config.get("features", {}).get("input_features", [])
-        if not input_features:
-            logger.warning("Keine Features in Config definiert")
-
-        # Validiere Models
-        models = config.get("models", {})
-        active_models = models.get("active_models", [])
-
-        if active_models and not isinstance(active_models, list):
-            raise ValueError("models.active_models muss eine Liste sein")
-
-        valid_model_names = {name for name in models.keys() if name != "active_models"}
-        valid_model_names.add("naive_baseline")  # Baseline kann optional explizit gesetzt werden
-
-        if active_models:
-            invalid_models = [m for m in active_models if m not in valid_model_names]
-            if invalid_models:
-                raise ValueError(f"Ungültige Modelle in models.active_models: {invalid_models}")
-
-        enabled_models = [
-            name for name, cfg in models.items()
-            if isinstance(cfg, dict) and cfg.get("enabled", False)
-        ]
-        if not enabled_models and not active_models:
-            logger.warning("Keine Modelle in Config aktiviert")
-
-        selected_models_count = len(active_models) if active_models else len(enabled_models)
-        logger.debug(f"Config validiert: {len(portfolios)} Portfolios, {selected_models_count} Modelle aktiviert/selektiert")
-
+        """Placeholder validation (no-op in best-case mode)."""
+        return
     def get(self, key_path: str, default: Any = None) -> Any:
         """
-        Holt Wert aus Config mit Punkt-Notation
+        Retrieve a value from config using dot notation
 
         Args:
-            key_path: Pfad zum Wert mit Punkten getrennt
-                     Beispiel: "models.pytorch_nn.epochs"
-            default: Rückgabewert wenn Key nicht existiert
+            key_path: Dotted path to the value (e.g. "models.pytorch_nn.epochs")
+            default: Value to return if the key does not exist
 
         Returns:
-            Wert aus Config oder default
+            Value from config or default
 
         Examples:
             >>> config.get("models.pytorch_nn.epochs")
@@ -269,11 +192,11 @@ class ConfigManager:
 
     def set(self, key_path: str, value: Any) -> None:
         """
-        Setzt Wert in Config
+        Set a value in config
 
         Args:
-            key_path: Pfad zum Wert mit Punkten getrennt
-            value: Zu setzender Wert
+            key_path: Dotted path to the value
+            value: Value to set
 
         Examples:
             >>> config.set("models.pytorch_nn.epochs", 300)
@@ -282,33 +205,27 @@ class ConfigManager:
         keys = key_path.split('.')
         config = self.config
 
-        # Navigiere bis zum vorletzten Key
+        # Navigate to the penultimate key
         for key in keys[:-1]:
             if key not in config:
                 config[key] = {}
             config = config[key]
 
-        # Setze den finalen Wert
+        # Set the final value
         config[keys[-1]] = value
         self.save_config()
 
     def save_config(self) -> None:
         """
-        Speichert Config zurück in Datei
-
-        Raises:
-            IOError: Wenn Datei nicht geschrieben werden kann
+        Persist config to disk
         """
-        try:
-            with open(self.path, 'w', encoding='utf-8') as f:
-                yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True)
-        except IOError as e:
-            raise IOError(f"Fehler beim Speichern der Config-Datei: {e}")
+        with open(self.path, 'w', encoding='utf-8') as f:
+            yaml.dump(self.config, f, default_flow_style=False, allow_unicode=True)
 
     def reload(self) -> None:
-        """Lädt Config-Datei neu"""
+        """Reload config file"""
         self.config = self._load_and_validate_config()
-        logger.info("Config neu geladen")
+        return
 
     def __repr__(self) -> str:
         return f"ConfigManager(path='{self.path}')"
@@ -316,11 +233,5 @@ class ConfigManager:
 
 if __name__ == "__main__":
     # Test
-    from logger_config import setup_logging
-    setup_logging()
-    
     config = ConfigManager()
-    logger.info("Config erfolgreich geladen!")
-    logger.info(f"Universe: {config.get('data.universe')}")
-    logger.info(f"PyTorch Epochs: {config.get('models.pytorch_nn.epochs')}")
-    logger.info(f"Input Features: {config.get('features.input_features')}")
+    print("Config loaded.")

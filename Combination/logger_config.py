@@ -1,5 +1,5 @@
 """
-logger_config.py - Zentrale Logging-Konfiguration für BA_combination
+logger_config.py - Central logging configuration for BA_combination
 """
 
 import logging
@@ -14,40 +14,40 @@ def setup_logging(
     format_string: Optional[str] = None
 ) -> logging.Logger:
     """
-    Konfiguriert das Logging-System für die gesamte Anwendung
+    Configure logging for the application
 
     Args:
-        log_level: Logging-Level (default: INFO)
-        log_file: Optionaler Pfad zu Log-Datei
-        format_string: Optionaler Format-String für Logs
+        log_level: Logging level (default: INFO)
+        log_file: Optional path to a log file
+        format_string: Optional format string for logs
 
     Returns:
-        Konfigurierter Root Logger
+        Configured root logger
     """
     if format_string is None:
         format_string = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
-    # Basis-Formatierung
+    # Base formatter
     formatter = logging.Formatter(format_string)
 
-    # Root Logger konfigurieren
+    # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
 
-    # Entferne vorhandene Handler
+    # Remove existing handlers
     root_logger.handlers.clear()
 
-    # Console Handler
+    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 
-    # File Handler (optional)
+    # Optional file handler
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setLevel(logging.DEBUG)  # File bekommt alle Logs
+        file_handler.setLevel(logging.DEBUG)  # File receives all logs
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
 
@@ -56,13 +56,12 @@ def setup_logging(
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Gibt einen Logger für ein spezifisches Modul zurück
+    Return a logger for a specific module
 
     Args:
-        name: Name des Moduls (normalerweise __name__)
+        name: Module name (normally __name__)
 
     Returns:
-        Logger-Instanz
+        Logger instance
     """
     return logging.getLogger(name)
-

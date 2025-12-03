@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
-"""Test-Script für FFC-Faktoren-Berechnung ohne API-Calls"""
+"""Test script for FFC factor calculation without API calls"""
 
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
 print("="*70)
-print("TEST: FFC-FAKTOREN-BERECHNUNG")
+print("TEST: FFC FACTOR CALCULATION")
 print("="*70)
 
-# 1. Erstelle Test-Daten mit gleichem Zeitraum
-print("\n1. ERSTELLE TEST-DATEN:")
+# 1. Create test data with matching range
+print("\n1. CREATE TEST DATA:")
 print("-"*70)
 
-# Price-Daten: 2024-01-01 bis 2025-11-15 (täglich)
+# Price data: 2024-01-01 to 2025-11-15 (daily)
 start_date = datetime(2024, 1, 1)
 end_date = datetime(2025, 11, 15)
 dates = pd.date_range(start=start_date, end=end_date, freq='D')
-# Nur Werktage
-dates = dates[dates.weekday < 5]  # Montag=0, Freitag=4
+# Only weekdays
+dates = dates[dates.weekday < 5]  # Monday=0, Friday=4
 
-print(f"  Price-Daten: {len(dates)} Datenpunkte")
-print(f"    Von: {dates.min()}")
-print(f"    Bis: {dates.max()}")
+print(f"  Price data points: {len(dates)}")
+print(f"    From: {dates.min()}")
+print(f"    To: {dates.max()}")
 
-# Company-Daten: Gleicher Zeitraum
+# Company data: same range
 company_dates = dates.copy()
-print(f"  Company-Daten: {len(company_dates)} Datenpunkte")
-print(f"    Von: {company_dates.min()}")
-print(f"    Bis: {company_dates.max()}")
+print(f"  Company data points: {len(company_dates)}")
+print(f"    From: {company_dates.min()}")
+print(f"    To: {company_dates.max()}")
 
-# 2. Erstelle Test-DataFrames
-print("\n2. ERSTELLE TEST-DATAFRAMES:")
+# 2. Create test DataFrames
+print("\n2. CREATE TEST DATAFRAMES:")
 print("-"*70)
 
 # Price DataFrame mit MultiIndex-Spalten
@@ -41,9 +41,9 @@ for stock in ['RHMG.DE', 'ENR1n.DE', 'TKAG.DE']:
     price_data[('.GDAXI', 'TRDPRC_1')] = np.random.randn(len(dates)).cumsum() + 15000
 
 price_df = pd.DataFrame(price_data, index=dates)
-print(f"  Price-DF Shape: {price_df.shape}")
-print(f"  Price-DF Columns: {list(price_df.columns)[:5]}")
-print(f"  Price-DF Index-Type: {type(price_df.index)}")
+print(f"  Price DF shape: {price_df.shape}")
+print(f"  Price DF columns: {list(price_df.columns)[:5]}")
+print(f"  Price DF index type: {type(price_df.index)}")
 
 # Company DataFrame
 company_data = {
@@ -57,12 +57,12 @@ company_data = {
 }
 company_df = pd.DataFrame(company_data)
 company_df = company_df.set_index('Date')
-print(f"  Company-DF Shape: {company_df.shape}")
-print(f"  Company-DF Columns: {list(company_df.columns)[:5]}")
-print(f"  Company-DF Index-Type: {type(company_df.index)}")
+print(f"  Company DF shape: {company_df.shape}")
+print(f"  Company DF columns: {list(company_df.columns)[:5]}")
+print(f"  Company DF index type: {type(company_df.index)}")
 
-# 3. Teste Datumskonvertierung (wie in FamaFrench.py)
-print("\n3. TESTE DATUMSKONVERTIERUNG:")
+# 3. Test date normalization (as in FamaFrench.py)
+print("\n3. TEST DATE NORMALIZATION:")
 print("-"*70)
 
 # Normalisiere beide Indizes
@@ -79,26 +79,26 @@ if isinstance(company_index, pd.DatetimeIndex):
         company_index = company_index.tz_localize(None)
     company_index = company_index.normalize()
 
-print(f"  Price Index normalisiert: {price_index.min()} bis {price_index.max()}")
-print(f"  Company Index normalisiert: {company_index.min()} bis {company_index.max()}")
+print(f"  Price index normalized: {price_index.min()} to {price_index.max()}")
+print(f"  Company index normalized: {company_index.min()} to {company_index.max()}")
 
-# 4. Teste gemeinsame Datenpunkte
-print("\n4. TESTE GEMEINSAME DATENPUNKTE:")
+# 4. Test overlapping dates
+print("\n4. TEST OVERLAPPING DATES:")
 print("-"*70)
 
 common_dates = price_index.intersection(company_index)
-print(f"  Gemeinsame Datenpunkte: {len(common_dates)}")
-print(f"  Erwartet: ~{len(dates)} (alle sollten übereinstimmen)")
+print(f"  Overlapping dates: {len(common_dates)}")
+print(f"  Expected: ~{len(dates)} (all should match)")
 
 if len(common_dates) > 0:
-    print(f"  ✓ ERFOLG: {len(common_dates)} gemeinsame Datenpunkte gefunden!")
-    print(f"    Erste 5: {common_dates[:5].tolist()}")
-    print(f"    Letzte 5: {common_dates[-5:].tolist()}")
+    print(f"  SUCCESS: {len(common_dates)} overlapping dates found!")
+    print(f"    First 5: {common_dates[:5].tolist()}")
+    print(f"    Last 5: {common_dates[-5:].tolist()}")
 else:
-    print(f"  ✗ FEHLER: Keine gemeinsamen Datenpunkte!")
+    print("  ERROR: No overlapping dates!")
 
-# 5. Teste Spaltenerkennung
-print("\n5. TESTE SPALTENERKENNUNG:")
+# 5. Test column detection
+print("\n5. TEST COLUMN DETECTION:")
 print("-"*70)
 
 stock_price_cols = []
@@ -114,7 +114,7 @@ for col in price_df.columns:
                 if not any(idx in first_level for idx in ['.GDAXI', '.SDAXI', '.V1XI']):
                     stock_price_cols.append(col)
 
-print(f"  Gefundene Stock-Preis-Spalten: {len(stock_price_cols)}")
+print(f"  Stock price columns found: {len(stock_price_cols)}")
 for col in stock_price_cols:
     print(f"    - {col}")
 
@@ -128,16 +128,15 @@ for col in price_df.columns:
             break
 
 if index_col:
-    print(f"  ✓ Index-Spalte gefunden: {index_col}")
+    print(f"  Index column found: {index_col}")
 else:
-    print(f"  ✗ Index-Spalte nicht gefunden!")
+    print("  Index column not found!")
 
 print("\n" + "="*70)
-print("TEST ABGESCHLOSSEN")
+print("TEST COMPLETE")
 print("="*70)
 
 if len(common_dates) > 0 and len(stock_price_cols) > 0 and index_col:
-    print("\n✓ ALLE TESTS BESTANDEN - FFC-Faktoren sollten berechnet werden können!")
+    print("\nALL TESTS PASSED - FFC factors should be computable!")
 else:
-    print("\n✗ EINIGE TESTS FEHLGESCHLAGEN - Bitte prüfen!")
-
+    print("\nSOME TESTS FAILED - Please investigate!")

@@ -1,10 +1,10 @@
 """
-FamaFrench.py - Berechnet (robuste) Fama-French/Carhart Faktoren.
+FamaFrench.py - Compute robust Fama-French/Carhart factors.
 
-Hinweis: Bei fehlenden Fundamentaldaten oder Index-Preisen werden Fallbacks genutzt:
-- Markt-Proxy = Durchschnitt der Aktienpreise
+If fundamental data or index prices are missing, fallbacks are used:
+- Market proxy = average of stock prices
 - SMB/HML = 0
-- Momentum bleibt aktiv, sofern Preis-Reihen vorhanden sind
+- Momentum stays active as long as price series exist
 """
 
 import pandas as pd
@@ -12,25 +12,21 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 from ConfigManager import ConfigManager
-from logger_config import get_logger
-
-logger = get_logger(__name__)
 
 
 class FamaFrenchFactorModel:
-    """Berechnet Fama-French/Carhart Faktoren mit robusten Fallbacks."""
+    """Calculate Fama-French/Carhart factors with robust fallbacks."""
 
     def __init__(self, config_path: str = "config.yaml"):
         self.config = ConfigManager(config_path)
         self.risk_free_rate = self.config.get("features.risk_free_rate", 0.027)  # 2.7% default
-        logger.info(f"Fama-French Model initialisiert (Risk-free Rate: {self.risk_free_rate*100:.2f}%)")
 
     # ----------------------------
     # Helper
     # ----------------------------
     @staticmethod
     def _normalize_index(df: pd.DataFrame, date_column: str = "Date") -> pd.DataFrame:
-        """Sorge dafür, dass ein DatetimeIndex existiert und normalisiert ist."""
+        """Ensure a normalized DatetimeIndex exists."""
         if df is None:
             return pd.DataFrame()
 
@@ -49,14 +45,14 @@ class FamaFrenchFactorModel:
 
     @staticmethod
     def _extract_stock_name(col: object) -> str:
-        """Extrahiert den Börsenticker aus einer Spalte (tuple oder string)."""
+        """Extract ticker symbol from a column (tuple or string)."""
         if isinstance(col, tuple) and len(col) > 0:
             return str(col[0]).strip()
         col_str = str(col)
         return col_str.split("_")[0].strip()
 
     def _find_stock_price_columns(self, prices: pd.DataFrame) -> List[object]:
-        """Sucht nach Aktienpreis-Spalten (.DE + erlaubter Feldname)."""
+        """Find stock price columns (.DE plus allowed field name)."""
         allowed_price_fields = [
             "TRDPRC_1",
             "OPEN_PRC",
@@ -74,7 +70,7 @@ class FamaFrenchFactorModel:
             upper = col_str.upper()
 
             if any(idx in upper for idx in [".GDAXI", ".SDAXI", ".V1XI"]):
-                # Index/Volatilität aussparen
+                # Skip index/volatility columns
                 continue
 
             if (".DE" in upper or "(" in col_str) and any(field in upper for field in allowed_price_fields):
@@ -87,20 +83,17 @@ class FamaFrenchFactorModel:
     ) -> pd.Series:
         """Sucht Index-Spalte, ansonsten Durchschnitt aller Aktienpreise."""
         if index_col in prices.columns:
-            logger.info(f"Nutze Index-Spalte aus Config: {index_col}")
             return prices[index_col].clip(lower=1e-10)
 
         for col in prices.columns:
             col_str = str(col)
             if any(idx in col_str for idx in [".GDAXI", ".SDAXI"]):
-                logger.info(f"Nutze gefundene Index-Spalte: {col}")
                 return prices[col].clip(lower=1e-10)
 
-        logger.info("Index-Spalte nicht gefunden – nehme Durchschnitt der Aktienpreise als Markt-Proxy.")
         return prices[stock_price_cols].mean(axis=1).clip(lower=1e-10)
 
     # ----------------------------
-    # Hauptfunktion
+    # Main function
     # ----------------------------
     def calculate_factors(
         self,
@@ -110,20 +103,14 @@ class FamaFrenchFactorModel:
         portfolio_name: str,
     ) -> pd.DataFrame:
         """
-        Berechnet Fama-French/Carhart Faktoren für ein Portfolio.
-        Robust bei fehlenden Fundamentaldaten: SMB/HML werden dann 0 gesetzt.
+        Calculate Fama-French/Carhart factors for a portfolio.
+        Robust when fundamentals are missing: SMB/HML are set to 0.
         """
-        logger.info(f"Berechne Fama-French Faktoren für Portfolio: {portfolio_name}")
-
         prices = self._normalize_index(price_df)
         company = self._normalize_index(company_df)
 
-        logger.debug(f"Price Columns: {list(prices.columns)[:10]} (gesamt {len(prices.columns)})")
-        logger.debug(f"Company Columns: {list(company.columns)[:10]} (gesamt {len(company.columns)})")
-
         stock_price_cols = self._find_stock_price_columns(prices)
         if not stock_price_cols:
-            logger.warning("Keine Aktien-Preisspalten gefunden – gebe leeres DataFrame zurück.")
             return pd.DataFrame()
 
         price_matrix = prices[stock_price_cols].clip(lower=1e-10)
@@ -134,21 +121,16 @@ class FamaFrenchFactorModel:
         returns_df = stock_returns.dropna()
         market_returns = market_prices.pct_change().reindex(returns_df.index)
 
-        # Risk-free auf Tagesbasis (Annäherung)
+        # Daily risk-free approximation
         daily_rf = self.risk_free_rate / 252.0
 
         factors_df = pd.DataFrame(index=returns_df.index)
         factors_df["Mkt_Rf"] = market_returns - daily_rf
 
-        # SMB/HML – Fallback auf 0, wenn Fundamentaldaten fehlen
-        try:
-            smb, hml = self._calculate_size_and_value_factors(
-                returns_df=returns_df, company_df=company, prices=price_matrix, stock_cols=stock_price_cols
-            )
-        except Exception as exc:
-            logger.warning(f"SMB/HML Fallback (setze 0) wegen Fehler: {exc}")
-            smb = pd.Series(0.0, index=factors_df.index)
-            hml = pd.Series(0.0, index=factors_df.index)
+        # SMB/HML - fallback to 0 when fundamentals are missing
+        smb, hml = self._calculate_size_and_value_factors(
+            returns_df=returns_df, company_df=company, prices=price_matrix, stock_cols=stock_price_cols
+        )
 
         wml = self._calculate_momentum_factor(returns_df)
 
@@ -156,17 +138,13 @@ class FamaFrenchFactorModel:
         factors_df["HML"] = hml.reindex(factors_df.index).fillna(0)
         factors_df["WML"] = wml.reindex(factors_df.index)
 
-        # Fülle verbleibende NaNs konservativ mit 0
+        # Fill remaining NaNs conservatively with 0
         factors_df = factors_df.fillna(0)
 
-        logger.info(
-            f"Fama-French Faktoren berechnet: {len(factors_df)} Datenpunkte "
-            f"(Index: {factors_df.index.min()} bis {factors_df.index.max()})"
-        )
         return factors_df
 
     # ----------------------------
-    # Faktoren
+    # Factors
     # ----------------------------
     def _calculate_size_and_value_factors(
         self,
@@ -176,30 +154,27 @@ class FamaFrenchFactorModel:
         stock_cols: List[object],
     ) -> Tuple[pd.Series, pd.Series]:
         """
-        SMB/HML Berechnung. Falls Fundamentaldaten fehlen, wird 0 zurückgegeben.
+        Compute SMB/HML; return 0 if fundamentals are missing.
         """
         if company_df is None or company_df.empty:
-            logger.info("Keine Company-Daten – SMB/HML werden auf 0 gesetzt.")
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
-        # Benötigte Spalten in Company-Daten suchen
         company_cols_upper = {str(c).upper(): c for c in company_df.columns}
         has_mc = any("MARKETCAP" in col for col in company_cols_upper)
         has_bv = any("BOOKVALUE" in col or "BVPS" in col for col in company_cols_upper)
 
         if not (has_mc and has_bv):
-            logger.info("Company-Daten ohne MarketCap/BookValue – SMB/HML = 0.")
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
-        # Falls genügend Daten vorhanden, könnte hier echte SMB/HML-Berechnung folgen.
-        # Aktuell (mangels vollständiger Fundamentaldaten) setzen wir 0.
+        # With enough data, a full SMB/HML calculation could be added here.
+        # Currently set to 0 due to missing fundamentals.
         zero = pd.Series(0.0, index=returns_df.index)
         return zero, zero
 
     def _calculate_momentum_factor(self, returns_df: pd.DataFrame, lookback_period: int = 60) -> pd.Series:
-        """Momentum-Faktor (WML) mit kürzerem Lookback für robuste Ergebnisse."""
+        """Momentum factor (WML) with shorter lookback for robustness."""
         cumulative_returns = (1 + returns_df).rolling(window=lookback_period, min_periods=20).apply(
             lambda x: (1 + x).prod() - 1, raw=True
         )
@@ -234,7 +209,7 @@ class FamaFrenchFactorModel:
         return pd.Series(wml_values, index=returns_df.index)
 
 
-# Convenience-Funktion
+# Convenience function
 def calculate_fama_french_factors(
     portfolio_name: str,
     price_df: pd.DataFrame,
@@ -242,15 +217,13 @@ def calculate_fama_french_factors(
     config_path: str = "config.yaml",
 ) -> pd.DataFrame:
     """
-    Berechnet Faktoren für ein Portfolio über die Convenience-API.
+    Calculate factors for a portfolio via the convenience API.
     """
     config = ConfigManager(config_path)
     portfolio_config = config.get(f"data.portfolios.{portfolio_name}")
-    if not portfolio_config:
-        raise ValueError(f"Portfolio '{portfolio_name}' nicht in Config gefunden")
 
-    index_name = portfolio_config.get("index", ".GDAXI")
-    index_col = f"{index_name}_TRDPRC_1"  # Standard-Format
+    index_name = (portfolio_config.get("index") if portfolio_config else None) or ".GDAXI"
+    index_col = f"{index_name}_TRDPRC_1"  # Standard format
 
     model = FamaFrenchFactorModel(config_path)
     return model.calculate_factors(
@@ -262,7 +235,4 @@ def calculate_fama_french_factors(
 
 
 if __name__ == "__main__":
-    from logger_config import setup_logging
-
-    setup_logging()
-    print("FamaFrench.py - Test")
+    model = FamaFrenchFactorModel()
