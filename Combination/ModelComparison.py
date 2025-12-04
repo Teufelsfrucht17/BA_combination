@@ -10,8 +10,6 @@ import joblib
 from pathlib import Path
 from typing import Dict, Any, Optional
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-
-# Import eigener Module
 from Datagrabber import DataGrabber
 from Dataprep import DataPrep, time_series_split
 from ConfigManager import ConfigManager
@@ -44,30 +42,23 @@ class ModelComparison:
 
         ffc_runs_enabled = bool(self.config.get("training.ffc_runs", False))
 
-        # 1. Fetch data (portfolio based)
         grabber = DataGrabber(self.config.path)
-        all_data = grabber.fetch_all_data()  # {"dax": {"daily": df, "intraday": df}, "sdax": {...}}
+        all_data = grabber.fetch_all_data()
 
-        # 2. Fetch company data (for FFC factors)
-        all_company_data = grabber.fetch_company_data()  # {"dax": df, "sdax": df}
+        all_company_data = grabber.fetch_company_data()
 
-        # 3. Data prep
         prep = DataPrep(self.config.path)
 
-        # For each portfolio
         for portfolio_name, portfolio_data in all_data.items():
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
             portfolio_display_name = portfolio_config.get("name", portfolio_name.upper())
             
-            # Pull company data for this portfolio
             company_df = all_company_data.get(portfolio_name, pd.DataFrame())
             
             if not isinstance(company_df, pd.DataFrame):
                 company_df = pd.DataFrame()
 
-            # For both periods
             for period_type, data in portfolio_data.items():
-                # Calculate FFC factors if company data is available
                 ff_factors = None
                 if not company_df.empty:
                     if period_type == "intraday":
@@ -107,7 +98,6 @@ class ModelComparison:
                     if ff_factors is None or ff_factors.empty:
                         ff_factors = None
 
-                # Train models: once without FFC, optionally with FFC
                 use_ffc_options = [False, True] if ffc_runs_enabled else [False]
                 for use_ffc in use_ffc_options:
                     if use_ffc and (ff_factors is None or ff_factors.empty):
@@ -116,7 +106,6 @@ class ModelComparison:
                     suffix = "_FFC" if use_ffc else ""
                     results_key = f"{portfolio_name}_{period_type}{suffix}"
                     
-                    # Prepare data (with or without FFC factors)
                     ff_factors_to_use = ff_factors if use_ffc else None
                     X, y = prep.prepare_data(
                         data, 
@@ -125,16 +114,9 @@ class ModelComparison:
                         ff_factors=ff_factors_to_use
                     )
 
-                    # Train-test split (chronological, no shuffle)
                     test_split = self.config.get("training.test_split", 0.2)
                     X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
 
-                    # ========================================
-                    # IMPORTANT: central scaling happens here
-                    # ========================================
-                    # Fit scaler on X_train only, then apply to both sets.
-                    # Prevents data leakage.
-                    # All models receive already scaled data.
                     scaler_method = self.config.get("training.scaling.method", "StandardScaler")
                     scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
                     scaler.fit(X_train)
@@ -150,12 +132,10 @@ class ModelComparison:
                         index=X_test.index
                     )
 
-                    # Trainiere alle Modelle
                     self.results[results_key] = self.train_all_models(
                         X_train, X_test, y_train, y_test, portfolio_name, period_type, use_ffc=use_ffc
                     )
 
-        # 4. Build comparison
         self.create_comparison_report()
 
     def train_all_models(
@@ -185,10 +165,9 @@ class ModelComparison:
         portfolio_display = portfolio_config.get("name", portfolio_name.upper())
 
 
-        # Define model configurations
         model_configs = {
             "naive_baseline": {
-                "enabled": True,  # Always enabled
+                "enabled": True,
                 "train_func": train_naive_baseline,
                 "display_name": "Baseline Model (Naive Predictor)",
                 "get_kwargs": lambda: {},
@@ -244,7 +223,6 @@ class ModelComparison:
         active_models = self.config.get("models.active_models", [])
         active_models_set = set(active_models) if isinstance(active_models, (list, tuple, set)) else set()
 
-        # Train all models
         for model_name, config in model_configs.items():
             if model_name != "naive_baseline" and active_models_set and model_name not in active_models_set:
                 continue
@@ -320,15 +298,13 @@ class ModelComparison:
     def create_comparison_report(self):
         """Create detailed portfolio-based comparison report as Excel"""
 
-        # Collect all metrics
         comparison_data = []
 
         for results_key, models in self.results.items():
-            # Parse results_key: "dax_daily" or "dax_daily_FFC" -> portfolio="dax", period="daily", use_ffc flag
             use_ffc = False
             if results_key.endswith("_FFC"):
                 use_ffc = True
-                results_key_base = results_key[:-4]  # drop "_FFC"
+                results_key_base = results_key[:-4]
             else:
                 results_key_base = results_key
             
@@ -337,7 +313,6 @@ class ModelComparison:
             else:
                 portfolio_name, period = "unknown", results_key_base
 
-            # Resolve portfolio display name
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
             if portfolio_config:
                 portfolio_display = portfolio_config.get("name", portfolio_name.upper())
@@ -362,16 +337,12 @@ class ModelComparison:
                     "Training_Time_s": model_results["training_time"]
                 })
 
-        # Build DataFrame
         df_comparison = pd.DataFrame(comparison_data)
 
         if df_comparison.empty:
             return
 
-        # Pivots for better overview
-        # Multi-index pivot: portfolio+period as columns
         df_comparison['Portfolio_Period'] = df_comparison['Portfolio'] + "_" + df_comparison['Period']
-        # If identical (Model, Portfolio_Period) combinations occur multiple times, use pivot_table with mean.
         pivot_r2 = df_comparison.pivot_table(
             index='Model',
             columns='Portfolio_Period',
@@ -385,14 +356,12 @@ class ModelComparison:
             aggfunc='mean'
         )
 
-        # Portfolio-specific pivots
         pivot_portfolio = df_comparison.pivot_table(
             index='Model',
             columns=['Portfolio', 'Period'],
             values='R2_Test'
         )
 
-        # Save as Excel
         output_path = Path("Results") / "model_comparison.xlsx"
         output_path.parent.mkdir(exist_ok=True)
 
@@ -402,7 +371,6 @@ class ModelComparison:
             pivot_mse.to_excel(writer, sheet_name='MSE_by_Portfolio_Period')
             pivot_portfolio.to_excel(writer, sheet_name='R2_Hierarchical')
 
-        # Save models
         if self.config.get("output.save_models"):
             self.save_models()
 
@@ -412,10 +380,8 @@ class ModelComparison:
         models_path.mkdir(exist_ok=True)
 
         for results_key, models in self.results.items():
-            # Parse results_key: "dax_daily" or "dax_daily_FFC" -> portfolio="dax", period="daily"
-            # Remove "_FFC" suffix if present
             if results_key.endswith("_FFC"):
-                results_key_base = results_key[:-4]  # Remove "_FFC"
+                results_key_base = results_key[:-4]
             else:
                 results_key_base = results_key
             
@@ -424,7 +390,6 @@ class ModelComparison:
             else:
                 portfolio_name, period = "unknown", results_key_base
 
-            # Create subfolder: Models/dax_daily/
             portfolio_period_path = models_path / results_key
             portfolio_period_path.mkdir(exist_ok=True)
 
@@ -442,6 +407,5 @@ class ModelComparison:
 
 
 if __name__ == "__main__":
-    # Test
     comparison = ModelComparison()
     comparison.run_full_comparison()

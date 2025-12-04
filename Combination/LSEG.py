@@ -71,13 +71,8 @@ def getHistoryData(
 
     return df
 
-
-# No tests here - called from Datagrabber
-
-
-# Constants for company data
 DEFAULT_COMPANY_FIELDS = [
-    "TR.CompanyMarketCapitalization.Date",  # Date field for market cap
+    "TR.CompanyMarketCapitalization.Date",
     "TR.CompanyMarketCapitalization",
     "TR.BookValuePerShare",
     "TR.BVPSActValue(Period=FY0)",
@@ -89,8 +84,8 @@ DEFAULT_COMPANY_FIELDS = [
 
 DEFAULT_COMPANY_PARAMS = {
     'Curn': 'USD',
-    'SDate': '2024-01-01',  # Same start as price data
-    "EDate": "2025-11-15",  # Same end as price data
+    'SDate': '2024-01-01',
+    "EDate": "2025-11-15",
     "Frq": "D"
 }
 
@@ -119,7 +114,6 @@ def getCompanyData(
     if not universe:
         raise ValueError("Universe must not be empty")
     
-    # Use defaults if not provided
     if fields is None:
         fields = DEFAULT_COMPANY_FIELDS
     if parameters is None:

@@ -10,7 +10,6 @@ import numpy as np
 from typing import Tuple, Optional, List
 from ConfigManager import ConfigManager
 
-# Constants
 DEFAULT_MIN_TRAIN_SIZE = 50
 DEFAULT_MIN_TEST_SIZE = 10
 DEFAULT_WARNING_DATASET_SIZE = 100
@@ -18,14 +17,12 @@ DEFAULT_MISSING_VALUES_WARNING_THRESHOLD = 10.0
 DEFAULT_MISSING_VALUES_ERROR_THRESHOLD = 50.0
 DEFAULT_EPSILON = 1e-8
 
-# Available features
 AVAILABLE_FEATURES = {
     'momentum_5', 'momentum_10', 'momentum_20',
     'portfolio_index_change', 'change_dax', 'change_sdax',
     'vdax_absolute', 'volume_ratio',
     'rolling_volatility_10', 'rolling_volatility_20',
     'rsi_14',
-    # Fama-French/Carhart factors
     'Mkt_Rf', 'SMB', 'HML', 'WML'
 }
 
@@ -61,10 +58,8 @@ class DataPrep:
             Tuple of (X, y) - features and target
 
         """
-        # Feature engineering
         features_df = self.create_features(df, portfolio_name=portfolio_name, ff_factors=ff_factors, period_type=period_type)
 
-        # Build X and y based on config
         X, y = self.create_xy(features_df, portfolio_name=portfolio_name)
         return X, y
 
@@ -85,16 +80,13 @@ class DataPrep:
         Returns:
             DataFrame with engineered features
         """
-        # Defensive copy and enforce datetime index
         df = df.copy()
         if 'Date' in df.columns and not isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
             df = df.set_index('Date')
         elif not isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
-            # Fallback: try parsing index
             df.index = pd.to_datetime(df.index, errors='coerce')
 
-        # Handle missing values early (prices/volume)
         price_like = [col for col in df.columns if 'TRDPRC_1' in str(col) or 'Price' in str(col)]
         volume_like = [col for col in df.columns if 'VOLUME' in str(col) or 'ACVOL_1' in str(col)]
         if price_like:
@@ -104,48 +96,33 @@ class DataPrep:
 
         features = pd.DataFrame(index=df.index)
 
-        # Portfolio-specific index feature names
         if portfolio_name:
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
-            index_identifier = portfolio_config.get("index", "").replace(".", "")  # .GDAXI -> GDAXI
+            index_identifier = portfolio_config.get("index", "").replace(".", "")
             index_feature_name = portfolio_config.get("index_feature", "portfolio_index_change")
         else:
             index_identifier = None
             index_feature_name = "portfolio_index_change"
 
-        # Identify stock columns (ending with .DE)
         stock_columns = [col for col in df.columns if '.DE' in str(col) and 'TRDPRC_1' in str(col)]
 
-        # Flatten MultiIndex columns if present
         if isinstance(df.columns, pd.MultiIndex):
-            # Build flat column names
             df.columns = ['_'.join(map(str, col)).strip() for col in df.columns.values]
             stock_columns = [col for col in df.columns if '.DE' in col and 'TRDPRC_1' in col]
 
-        # Compute portfolio average price (all stocks)
         if len(stock_columns) > 0:
             portfolio_prices = df[stock_columns].mean(axis=1)
         else:
-            # Fallback: use first numeric column
             portfolio_prices = df.select_dtypes(include=[np.number]).iloc[:, 0]
 
-        # ==========================================
-        # Momentum features (from config)
-        # ==========================================
         for period in self.config.get("features.momentum_periods", [5, 10, 20]):
             features[f'momentum_{period}'] = portfolio_prices.pct_change(period)
 
-        # ==========================================
-        # Index features (portfolio specific)
-        # ==========================================
-
-        # Portfolio index change (DAX or SDAX depending on portfolio)
         if index_identifier:
             index_columns = [col for col in df.columns if index_identifier in col]
             if len(index_columns) > 0:
                 index_prices = df[index_columns[0]]
                 features[index_feature_name] = index_prices.pct_change()
-                # Alias as portfolio_index_change for generic config access
                 features['portfolio_index_change'] = features[index_feature_name]
             else:
                 features[index_feature_name] = 0.0
@@ -153,16 +130,12 @@ class DataPrep:
         else:
             features['portfolio_index_change'] = 0.0
 
-        # VDAX absolute (volatility) shared across portfolios
         vdax_columns = [col for col in df.columns if 'V1XI' in col]
         if len(vdax_columns) > 0:
             features['vdax_absolute'] = df[vdax_columns[0]].abs()
         else:
             features['vdax_absolute'] = 0.0
 
-        # ==========================================
-        # Volume Features
-        # ==========================================
         volume_columns = [col for col in df.columns if 'VOLUME' in col and '.DE' in col]
         if len(volume_columns) > 0:
             portfolio_volume = df[volume_columns].mean(axis=1)
@@ -171,16 +144,9 @@ class DataPrep:
         else:
             features['volume_ratio'] = 1.0
 
-        # ==========================================
-        # Optional: RSI (falls in Config aktiviert)
-        # ==========================================
         if 'rsi_14' in self.config.get("features.input_features", []):
             features['rsi_14'] = self.calculate_rsi(portfolio_prices, period=14)
 
-        # ==========================================
-        # Target: next price change
-        # ==========================================
-        # Compute future returns (all stocks)
         if len(stock_columns) > 0:
             clipped = df[stock_columns].clip(lower=DEFAULT_EPSILON)
             portfolio_returns = np.log(clipped / clipped.shift(1)).mean(axis=1)
@@ -190,15 +156,9 @@ class DataPrep:
 
         features['price_change_next'] = portfolio_returns.shift(-1)
 
-        # ==========================================
-        # Volatility features
-        # ==========================================
         for window in self.config.get("features.volatility_windows", []):
             features[f'rolling_volatility_{window}'] = portfolio_returns.rolling(window, min_periods=window).std()
 
-        # ==========================================
-        # Time/calendar features
-        # ==========================================
         if isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             dt_index = df.index
             if isinstance(dt_index, pd.PeriodIndex):
@@ -207,11 +167,9 @@ class DataPrep:
             features['day_of_week'] = dt_index.weekday
             features['hour_of_day'] = dt_index.hour
         else:
-            # Fallback: no time features
             features['day_of_week'] = 0
             features['hour_of_day'] = 0
 
-        # Drop NaN rows and initial window effects
         drop_n = 0
         momentum_periods = self.config.get("features.momentum_periods", [])
         if momentum_periods:
@@ -225,36 +183,24 @@ class DataPrep:
         if drop_n > 0 and len(features) > drop_n:
             features = features.iloc[drop_n:]
 
-        # Ensure price_change_next is present
         features = features.dropna(subset=['price_change_next'])
 
-        # Fill remaining sporadic NaNs (if earlier steps did not cover them)
         fillable_cols = [c for c in features.columns if c not in ['price_change_next', 'price_direction_next']]
         features[fillable_cols] = features[fillable_cols].ffill()
         features = features.dropna()
 
-        # ==========================================
-        # Fama-French/Carhart factors (optional)
-        # ==========================================
         if ff_factors is not None and not ff_factors.empty:
-            # Merge FFC factors based on date
-            # For intraday: company data must already be mapped to daily frequency
             if isinstance(features.index, pd.DatetimeIndex) and isinstance(ff_factors.index, pd.DatetimeIndex):
-                # Align FFC factors with the feature index
-                # For intraday use date-only alignment
                 if period_type == "intraday" or features.index.hour.nunique() > 1:
-                    # Intraday: normalize to dates for alignment
                     features_date = features.index.normalize()
                     ff_factors_date = ff_factors.index.normalize()
                     
-                    # Build mapping: date -> FFC factors
                     ff_dict = {}
                     for date, row in ff_factors.iterrows():
                         date_only = pd.Timestamp(date).normalize()
                         if date_only not in ff_dict:
                             ff_dict[date_only] = row
                     
-                    # Assign FFC factors (same values for all intervals of a day)
                     for date_idx in features.index:
                         date_only = pd.Timestamp(date_idx).normalize()
                         if date_only in ff_dict:
@@ -263,13 +209,9 @@ class DataPrep:
                                 if col in ff_row:
                                     features.loc[date_idx, col] = ff_row[col]
                 else:
-                    # Daily: direct alignment
                     for col in ['Mkt_Rf', 'SMB', 'HML', 'WML']:
                         if col in ff_factors.columns:
                             features[col] = ff_factors[col]
-        # ==========================================
-        # Optional classification target
-        # ==========================================
         features['price_direction_next'] = (features['price_change_next'] > 0).astype(int)
 
         return features
@@ -312,22 +254,18 @@ class DataPrep:
         Raises:
             ValueError: If no features are found
         """
-        # Desired features from config
         input_features = self.config.get("features.input_features", [])
         target = self.config.get("features.target", "price_change_next")
 
-        # Filter only enabled and available features
         available_features = [f for f in input_features if f in features_df.columns]
         missing_features = set(input_features) - set(available_features)
 
         if len(available_features) == 0:
             available_features = list(features_df.columns)
 
-        # Build X and y
         X = features_df[available_features].copy()
         y = features_df[target].copy()
 
-        # Align X and y (drop rows with NaN)
         common_index = X.dropna().index.intersection(y.dropna().index)
         X = X.loc[common_index]
         y = y.loc[common_index]
@@ -358,12 +296,10 @@ def time_series_split(
     """
     n_samples = len(X)
 
-    # Compute split index
     split_idx = int(n_samples * (1 - test_size))
     n_train = split_idx
     n_test = n_samples - split_idx
 
-    # Perform split
     X_train = X.iloc[:split_idx]
     X_test = X.iloc[split_idx:]
     y_train = y.iloc[:split_idx]

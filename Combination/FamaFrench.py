@@ -19,11 +19,8 @@ class FamaFrenchFactorModel:
 
     def __init__(self, config_path: str = "config.yaml"):
         self.config = ConfigManager(config_path)
-        self.risk_free_rate = self.config.get("features.risk_free_rate", 0.027)  # 2.7% default
+        self.risk_free_rate = self.config.get("features.risk_free_rate", 0.027)
 
-    # ----------------------------
-    # Helper
-    # ----------------------------
     @staticmethod
     def _normalize_index(df: pd.DataFrame, date_column: str = "Date") -> pd.DataFrame:
         """Ensure a normalized DatetimeIndex exists."""
@@ -70,7 +67,6 @@ class FamaFrenchFactorModel:
             upper = col_str.upper()
 
             if any(idx in upper for idx in [".GDAXI", ".SDAXI", ".V1XI"]):
-                # Skip index/volatility columns
                 continue
 
             if (".DE" in upper or "(" in col_str) and any(field in upper for field in allowed_price_fields):
@@ -92,9 +88,6 @@ class FamaFrenchFactorModel:
 
         return prices[stock_price_cols].mean(axis=1).clip(lower=1e-10)
 
-    # ----------------------------
-    # Main function
-    # ----------------------------
     def calculate_factors(
         self,
         price_df: pd.DataFrame,
@@ -116,18 +109,15 @@ class FamaFrenchFactorModel:
         price_matrix = prices[stock_price_cols].clip(lower=1e-10)
         market_prices = self._find_market_series(prices, index_col=index_col, stock_price_cols=stock_price_cols)
 
-        # Returns
         stock_returns = price_matrix.pct_change()
         returns_df = stock_returns.dropna()
         market_returns = market_prices.pct_change().reindex(returns_df.index)
 
-        # Daily risk-free approximation
         daily_rf = self.risk_free_rate / 252.0
 
         factors_df = pd.DataFrame(index=returns_df.index)
         factors_df["Mkt_Rf"] = market_returns - daily_rf
 
-        # SMB/HML - fallback to 0 when fundamentals are missing
         smb, hml = self._calculate_size_and_value_factors(
             returns_df=returns_df, company_df=company, prices=price_matrix, stock_cols=stock_price_cols
         )
@@ -138,14 +128,10 @@ class FamaFrenchFactorModel:
         factors_df["HML"] = hml.reindex(factors_df.index).fillna(0)
         factors_df["WML"] = wml.reindex(factors_df.index)
 
-        # Fill remaining NaNs conservatively with 0
         factors_df = factors_df.fillna(0)
 
         return factors_df
 
-    # ----------------------------
-    # Factors
-    # ----------------------------
     def _calculate_size_and_value_factors(
         self,
         returns_df: pd.DataFrame,
@@ -168,8 +154,6 @@ class FamaFrenchFactorModel:
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
-        # With enough data, a full SMB/HML calculation could be added here.
-        # Currently set to 0 due to missing fundamentals.
         zero = pd.Series(0.0, index=returns_df.index)
         return zero, zero
 
@@ -209,7 +193,6 @@ class FamaFrenchFactorModel:
         return pd.Series(wml_values, index=returns_df.index)
 
 
-# Convenience function
 def calculate_fama_french_factors(
     portfolio_name: str,
     price_df: pd.DataFrame,
@@ -223,7 +206,7 @@ def calculate_fama_french_factors(
     portfolio_config = config.get(f"data.portfolios.{portfolio_name}")
 
     index_name = (portfolio_config.get("index") if portfolio_config else None) or ".GDAXI"
-    index_col = f"{index_name}_TRDPRC_1"  # Standard format
+    index_col = f"{index_name}_TRDPRC_1"
 
     model = FamaFrenchFactorModel(config_path)
     return model.calculate_factors(

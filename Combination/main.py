@@ -1,14 +1,13 @@
-#!/usr/bin/env python
 """
 main.py - Main program for BA_combination Unified Version
 Combines the strengths of version 1 and 2
 
 Usage:
-    python main.py                          # Standard comparison (both periods)
-    python main.py --mode daily             # Only daily data
-    python main.py --mode intraday          # Only 30-minute data
-    python main.py --features momentum_5 change_dax  # Custom features
-    python main.py --config my_config.yaml  # Custom config
+    python main.py                          Standard comparison (both periods)
+    python main.py --mode daily             Only daily data
+    python main.py --mode intraday          Only 30-minute data
+    python main.py --features momentum_5 change_dax  Custom features
+    python main.py --config my_config.yaml  Custom config
 """
 
 import argparse
@@ -30,17 +29,17 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                          # Compare both periods
-  python main.py --mode daily             # Only daily data
-  python main.py --features momentum_5 change_dax  # Custom features
-  python main.py --config my_config.yaml  # Custom config
+  python main.py                          Compare both periods
+  python main.py --mode daily             Only daily data
+  python main.py --features momentum_5 change_dax  Custom features
+  python main.py --config my_config.yaml  Custom config
 
 Features in config:
-  - momentum_5, momentum_10, momentum_20  # Momentum indicators
-  - change_dax                            # DAX change
-  - vdax_absolute                         # VDAX absolute value
-  - volume_ratio                          # Volume ratio
-  - rsi_14                                # RSI (optional)
+  - momentum_5, momentum_10, momentum_20  Momentum indicators
+  - change_dax                            DAX change
+  - vdax_absolute                         VDAX absolute value
+  - volume_ratio                          Volume ratio
+  - rsi_14                                RSI (optional)
         """
     )
 

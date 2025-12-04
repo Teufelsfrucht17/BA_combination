@@ -1,7 +1,4 @@
-# config.yaml - Central configuration for BA_combination Unified Version
-
 data:
-  # Portfolio definitions (each portfolio has its own universe and index)
   portfolios:
     dax:
       name: "DAX Portfolio"
@@ -12,7 +9,7 @@ data:
         - FTKn.DE
         - ACT1.DE
         - DEZG.DE
-      index: ".GDAXI"  # DAX index (large cap)
+      index: ".GDAXI"
       index_feature: "change_dax"
 
     sdax:
@@ -24,12 +21,11 @@ data:
         - COKG.DE
         - CWCG.DE
         - DMPG.DE
-      index: ".SDAXI"  # SDAX index (small cap)
+      index: ".SDAXI"
       index_feature: "change_sdax"
 
-  # Common indices for all portfolios (e.g. volatility)
   common_indices:
-    - ".V1XI"  # VDAX index (volatility index)
+    - ".V1XI"
 
   fields:
     - "OPEN_PRC"
@@ -41,35 +37,27 @@ data:
 
 
 features:
-  # Risk-free rate for Fama-French/Carhart models (decimal: 2.7% = 0.027)
-  risk_free_rate: 0.027  # 2.7% per year (adjust as needed)
+  risk_free_rate: 0.027
   
-  # Input features (adjustable)
-  # Note: change_dax or change_sdax is chosen automatically based on portfolio
   input_features:
-    - momentum_5     # 5-period momentum
-    - momentum_10    # 10-period momentum
-    - momentum_20    # 20-period momentum
-    - portfolio_index_change  # Becomes change_dax or change_sdax per portfolio
-    - vdax_absolute  # VDAX absolute value
-    - volume_ratio   # Volume ratio
-    - rolling_volatility_10   # Volatility over 10 periods
-    - rolling_volatility_20   # Volatility over 20 periods
+    - momentum_5
+    - momentum_10
+    - momentum_20
+    - portfolio_index_change
+    - vdax_absolute
+    - volume_ratio
+    - rolling_volatility_10
+    - rolling_volatility_20
 
-  # Target variable
   target: "price_change_next"
 
-  # Feature engineering parameters
   momentum_periods: [5, 10, 20]
   rolling_window: 20
   volatility_windows: [10, 20]
 
 models:
-  # Optional: run only selected models (empty uses enabled flags)
   active_models: ["pytorch_nn", "ols", "ridge"]
-  # ["pytorch_nn", "ols", "ridge", "random_forest"]
 
-  # Model settings
   pytorch_nn:
     enabled: true
     hidden1: 128
@@ -96,7 +84,7 @@ models:
     min_samples_split: 5
 
 training:
-  ffc_runs: true  # Toggle FFC factor runs
+  ffc_runs: true
   test_split: 0.2
   cross_validation:
     enabled: true
@@ -104,10 +92,10 @@ training:
     type: "TimeSeriesSplit"
 
   scaling:
-    method: "StandardScaler"  # or "MinMaxScaler"
+    method: "StandardScaler"
 
 output:
   save_models: true
   save_predictions: true
   save_comparison: true
-  format: "excel"  # and/or "csv"
+  format: "excel"

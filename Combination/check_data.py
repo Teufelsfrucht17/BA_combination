@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check structure of company and price data"""
 
 import pandas as pd

@@ -10,7 +10,6 @@ import copy
 from pathlib import Path
 from typing import Tuple, Dict, Any, Optional, Union, List
 
-# Sklearn models
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
@@ -18,12 +17,10 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
-# PyTorch
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 
-# Constants
 DEFAULT_RANDOM_SEED = 42
 DEFAULT_VALIDATION_SPLIT = 0.2
 DEFAULT_EARLY_STOPPING_PATIENCE = 20
@@ -42,9 +39,6 @@ def directional_accuracy(y_true: Union[np.ndarray, pd.Series, List], y_pred: Uni
     return float(np.mean(np.sign(y_true) == np.sign(y_pred)))
 
 
-# ============================================
-# PyTorch Neural Network
-# ============================================
 
 class SimpleNet(nn.Module):
     """Simple MLP with two hidden layers"""
@@ -110,7 +104,6 @@ def train_pytorch_model(
         model: Trained PyTorch model
         metrics: Dictionary with r2, mse, mae, train_r2, directional_accuracy, best_val_loss, stopped_at_epoch, etc.
     """
-    # Seeds for reproducibility
     np.random.seed(DEFAULT_RANDOM_SEED)
     torch.manual_seed(DEFAULT_RANDOM_SEED)
     if torch.cuda.is_available():
@@ -120,13 +113,11 @@ def train_pytorch_model(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Convert to tensors
     X_train_t = torch.tensor(X_train.values if isinstance(X_train, pd.DataFrame) else X_train, dtype=torch.float32)
     y_train_t = torch.tensor(y_train.values if isinstance(y_train, pd.Series) else y_train, dtype=torch.float32).reshape(-1, 1)
     X_test_t = torch.tensor(X_test.values if isinstance(X_test, pd.DataFrame) else X_test, dtype=torch.float32)
     y_test_t = torch.tensor(y_test.values if isinstance(y_test, pd.Series) else y_test, dtype=torch.float32).reshape(-1, 1)
 
-    # Optionally standardize target (fit on inner training slice)
     n_train = len(X_train_t)
     val_idx = int(n_train * (1 - validation_split))
     X_train_inner = X_train_t[:val_idx]
@@ -146,39 +137,31 @@ def train_pytorch_model(
         y_train_inner_std = y_train_inner
         y_val_std = y_val
 
-    # Internal validation split (chronological)
-    # DataLoader (no shuffle for time series)
     train_dataset = TensorDataset(X_train_inner, y_train_inner_std)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
 
-    # Model
     n_features = X_train_t.shape[1]
     model = SimpleNet(in_features=n_features, hidden1=hidden1, hidden2=hidden2, out_features=1).to(device)
 
-    # Optimizer and loss
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.MSELoss()
 
-    # Optional: learning rate scheduler
     scheduler = None
     if use_scheduler:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='min', factor=0.5, patience=scheduler_patience
         )
 
-    # Early Stopping
     best_val_loss = float('inf')
     best_epoch = 0
     patience_counter = 0
     best_model_state = None
     train_losses, val_losses = [], []
 
-    # Training Loop
     model.train()
     for epoch in range(epochs):
         epoch_loss = 0.0
 
-        # Training
         for batch_X, batch_y in train_loader:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
 
@@ -192,7 +175,6 @@ def train_pytorch_model(
 
         avg_train_loss = epoch_loss / len(train_loader)
 
-        # Validation
         model.eval()
         with torch.no_grad():
             val_outputs = model(X_val.to(device))
@@ -202,11 +184,9 @@ def train_pytorch_model(
         train_losses.append(avg_train_loss)
         val_losses.append(val_loss)
 
-        # Learning Rate Scheduler
         if scheduler is not None:
             scheduler.step(val_loss)
 
-        # Early Stopping Check
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
@@ -215,22 +195,17 @@ def train_pytorch_model(
         else:
             patience_counter += 1
 
-        # Print Progress
-        # Early Stopping
         if patience_counter >= early_stopping_patience:
             break
 
-    # Load best model
     if best_model_state is not None:
         model.load_state_dict(best_model_state)
 
-    # Final evaluation
     model.eval()
     with torch.no_grad():
         y_train_pred_std = model(X_train_t.to(device)).cpu().numpy().flatten()
         y_test_pred_std = model(X_test_t.to(device)).cpu().numpy().flatten()
 
-    # Transform back to original scale
     y_mean_val = y_mean.item() if hasattr(y_mean, "item") else float(y_mean)
     y_std_val = y_std.item() if hasattr(y_std, "item") else float(y_std)
     if standardize_target:
@@ -244,7 +219,6 @@ def train_pytorch_model(
         y_train_true = y_train_t.cpu().numpy().flatten()
         y_test_true = y_test_t.cpu().numpy().flatten()
 
-    # Optional: Loss-Curves speichern
     if portfolio_name and period_type:
         curves_path = Path("Results") / f"pytorch_training_{portfolio_name}_{period_type}.csv"
         curves_path.parent.mkdir(exist_ok=True)
@@ -271,9 +245,6 @@ def train_pytorch_model(
 
 
 
-# ============================================
-# OLS Regression
-# ============================================
 
 def train_ols(
     X_train: Union[pd.DataFrame, np.ndarray],
@@ -302,9 +273,6 @@ def train_ols(
     return model, metrics
 
 
-# ============================================
-# Ridge Regression
-# ============================================
 
 def train_ridge(
     X_train: Union[pd.DataFrame, np.ndarray],
@@ -353,9 +321,6 @@ def train_ridge(
     return grid.best_estimator_, metrics
 
 
-# ============================================
-# Random Forest
-# ============================================
 
 def train_random_forest(
     X_train: Union[pd.DataFrame, np.ndarray],
@@ -372,7 +337,6 @@ def train_random_forest(
     Train a RandomForestRegressor with optional hyperparameter tuning.
     """
     if use_gridsearch:
-        # Hyperparameter grid for search
         param_grid = {
             'n_estimators': [100, 200, 300],
             'max_depth': [5, 10, 15, None],
@@ -412,7 +376,6 @@ def train_random_forest(
         }
 
     else:
-        # Simple training without GridSearch
         model = RandomForestRegressor(
             n_estimators=n_estimators,
             max_depth=max_depth,
@@ -438,9 +401,6 @@ def train_random_forest(
     return model, metrics
 
 
-# ============================================
-# Baseline Model (Naive Predictor)
-# ============================================
 
 def train_naive_baseline(
     X_train: Union[pd.DataFrame, np.ndarray],
@@ -453,7 +413,6 @@ def train_naive_baseline(
 
     The model predicts y_pred[t] = y[t-1]; serves as a benchmark.
     """
-    # Use previous value as prediction
     y_train_pred = np.concatenate([[0.0], y_train.values[:-1]])
     y_test_pred = np.concatenate([[y_train.iloc[-1]], y_test.values[:-1]])
 

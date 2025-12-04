@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Dict
 from copy import deepcopy
 
-# Constants
 DEFAULT_CONFIG = {
     "data": {
         "portfolios": {},
@@ -96,7 +95,6 @@ class ConfigManager:
         """
         self.path = Path(config_path)
         if not self.path.is_absolute():
-            # Resolve relative paths against the module directory
             self.path = Path(__file__).parent / self.path
 
         self.config = self._load_and_validate_config()
@@ -120,10 +118,8 @@ class ConfigManager:
         with open(self.path, 'r', encoding='utf-8') as f:
             user_config = yaml.safe_load(f) or {}
 
-        # Merge with defaults
         config = self._deep_merge(deepcopy(DEFAULT_CONFIG), user_config)
 
-        # Dynamic periods: always from (today - 1 Jahr) bis heute
         today = datetime.date.today()
         one_year_ago = today - datetime.timedelta(days=365)
         start_str = one_year_ago.strftime("%Y-%m-%d")
@@ -135,7 +131,6 @@ class ConfigManager:
                 periods[key]["start"] = start_str
                 periods[key]["end"] = end_str
 
-        # Validate config
         self._validate_config(config)
         return config
 
@@ -205,13 +200,11 @@ class ConfigManager:
         keys = key_path.split('.')
         config = self.config
 
-        # Navigate to the penultimate key
         for key in keys[:-1]:
             if key not in config:
                 config[key] = {}
             config = config[key]
 
-        # Set the final value
         config[keys[-1]] = value
         self.save_config()
 
@@ -232,6 +225,5 @@ class ConfigManager:
 
 
 if __name__ == "__main__":
-    # Test
     config = ConfigManager()
     print("Config loaded.")

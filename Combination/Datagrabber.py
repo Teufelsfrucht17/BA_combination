@@ -41,10 +41,8 @@ class DataGrabber:
         for portfolio_name in portfolios.keys():
             all_data[portfolio_name] = {}
 
-            # Daily data
             all_data[portfolio_name]["daily"] = self.fetch_portfolio_data(portfolio_name, "daily")
 
-            # 30-minute data
             all_data[portfolio_name]["intraday"] = self.fetch_portfolio_data(portfolio_name, "intraday")
 
         return all_data
@@ -77,7 +75,6 @@ class DataGrabber:
                 df.columns = [f"{instrument}_{col}" for col in df.columns]
             return df
 
-        # Portfolio data (equities)
         universe = portfolio_config["universe"]
         portfolio_df = LS.getHistoryData(
             universe=universe,
@@ -88,7 +85,6 @@ class DataGrabber:
         )
         portfolio_df = _prefix_single_universe(portfolio_df, universe)
 
-        # Portfolio-specific index (DAX or SDAX)
         portfolio_index = portfolio_config.get("index")
         index_df = pd.DataFrame()
         if portfolio_index:
@@ -101,7 +97,6 @@ class DataGrabber:
             )
             index_df = _prefix_single_universe(index_df, [portfolio_index])
 
-        # Common indices (VDAX)
         common_indices = self.config.get("data.common_indices", [])
         common_df = pd.DataFrame()
         if len(common_indices) > 0:
@@ -113,16 +108,13 @@ class DataGrabber:
                 interval=interval
             )
             common_df = _prefix_single_universe(common_df, common_indices)
-            # Quick visibility for VDAX/VIX fetch
             print(f"Common indices fetched ({len(common_indices)}): {common_df.shape}")
             print(common_df.head(2))
 
         combined_df = pd.concat([portfolio_df, index_df, common_df], axis=1)
 
-        # Remove duplicate column names if present
         combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]
 
-        # Save as Excel
         self.exceltextwriter(combined_df, f"{portfolio_name}_{period_type}")
 
         return combined_df
@@ -147,7 +139,6 @@ class DataGrabber:
 
         for portfolio_name in portfolios.keys():
             portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
-            # Universe (equities) for this portfolio
             universe = portfolio_config["universe"]
 
             period_config = self.config.get("data.periods.daily")
@@ -191,7 +182,6 @@ class DataGrabber:
             interval=interval
         )
 
-        # Index data (DAX, SDAX, VDAX)
         index_df = LS.getHistoryData(
             universe=self.config.get("data.indices"),
             fields=["TRDPRC_1"],
@@ -202,7 +192,6 @@ class DataGrabber:
 
         combined_df = self.combine_data(portfolio_df, index_df)
 
-        # Save as Excel (compatibility with version 1)
         self.exceltextwriter(combined_df, f"combined_{period_type}")
 
         return combined_df
@@ -218,10 +207,8 @@ class DataGrabber:
         Returns:
             Combined DataFrame
         """
-        # Concatenate along columns (indices should already align)
         combined_df = pd.concat([portfolio_df, index_df], axis=1)
 
-        # Remove duplicate column names if present
         combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()]
 
         return combined_df
@@ -237,17 +224,14 @@ class DataGrabber:
         Raises:
             IOError: If Excel file cannot be written
         """
-        # Create a date column from the index if needed
         d = df.copy()
         if isinstance(d.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             d = d.reset_index()
-            # After reset_index the column is named after the index or 'index'
             if "index" in d.columns:
                 d = d.rename(columns={"index": "Date"})
             elif d.columns[0] not in ("Date", "Datetime"):
                 d = d.rename(columns={d.columns[0]: "Date"})
         else:
-            # Otherwise detect an existing date/time column and normalize
             for c in ("Date", "Datetime", "DATE", "timestamp"):
                 if c in d.columns:
                     if c != "Date":
@@ -262,9 +246,7 @@ class DataGrabber:
             out_path, engine="xlsxwriter", datetime_format="yyyy-mm-dd hh:mm:ss"
         ) as writer:
             for column in df.columns:
-                # Sheet name: max 31 characters, clean invalid characters
                 sheet_name = str(column).strip()[:31]
-                # Remove invalid characters for Excel sheet names
                 sheet_name = sheet_name.replace("/", "_").replace("\\", "_").replace("?", "_")
                 sheet_name = sheet_name.replace("*", "_").replace("[", "_").replace("]", "_")
                 sheet_name = sheet_name.replace(":", "_").replace("'", "_")
@@ -272,14 +254,11 @@ class DataGrabber:
                 if not sheet_name:
                     sheet_name = "sheet"
                 
-                # Build frame with date and current column, keep original names
                 if "Date" in d.columns:
                     frame = d[["Date", column]].copy()
                 else:
-                    # Fallback: without date column
                     frame = d[[column]].copy()
                 
-                # Keep original column names and flatten MultiIndex if needed
                 if isinstance(frame.columns, pd.MultiIndex):
                     frame.columns = [str(col).replace("/", "_") for col in frame.columns]
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check company data files"""
 
 import pandas as pd
@@ -14,7 +13,6 @@ if not data_dir.exists():
     print("\nDataStorage directory does not exist!")
     exit(1)
 
-# Find all company data files
 company_files = [f for f in os.listdir(data_dir) 
                  if 'company' in f.lower() 
                  and f.endswith('.xlsx') 
@@ -29,7 +27,6 @@ if len(company_files) == 0:
     print("Files must be retrieved.")
     exit(1)
 
-# Inspect each file
 for filename in company_files:
     filepath = data_dir / filename
     print(f"\n{'='*70}")

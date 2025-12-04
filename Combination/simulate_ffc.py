@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Simulate FFC factor calculation with existing data"""
 
 import pandas as pd
@@ -9,7 +8,6 @@ print("="*70)
 print("SIMULATION: FFC FACTOR CALCULATION")
 print("="*70)
 
-# 1. Load price data
 print("\n1. LOAD PRICE DATA:")
 print("-"*70)
 price_df = pd.read_excel('DataStorage/dax_daily.xlsx', sheet_name=0)
@@ -22,7 +20,6 @@ if 'Date' in price_df.columns:
     price_df = price_df.set_index('Date')
     print(f"    Date range: {price_df.index.min()} to {price_df.index.max()}")
 
-# 2. Check company data
 print("\n2. CHECK COMPANY DATA:")
 print("-"*70)
 company_files = [f for f in os.listdir('DataStorage') 
@@ -35,7 +32,6 @@ if len(company_files) == 0:
     print("  NO company data files found!")
     print("  Creating synthetic company data...")
     
-    # Create synthetic company data with matching dates
     dates = price_df.index.normalize().unique()
     company_data = {
         'Date': dates,
@@ -57,7 +53,6 @@ else:
         company_df = company_df.set_index('Date')
         print(f"    Date range: {company_df.index.min()} to {company_df.index.max()}")
 
-# 3. Check overlapping dates
 print("\n3. CHECK OVERLAPPING DATES:")
 print("-"*70)
 price_index = price_df.index.normalize()

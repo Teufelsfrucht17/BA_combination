@@ -23,7 +23,6 @@ import pandas as pd
 
 import matplotlib
 
-# Use a non-interactive backend to avoid display requirements on servers
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -48,7 +47,6 @@ def _parse_column_label(label: Any) -> Tuple[str, Optional[str]]:
     if match:
         return match.group("instr").strip(), match.group("field").strip()
 
-    # Fallback: split on comma if present
     if "," in text:
         parts = [p.strip(" _()") for p in text.split(",")]
         if len(parts) >= 2:
@@ -91,7 +89,6 @@ def _plot_single_dataframe(df: pd.DataFrame, plot_name: str, output_dir: Path) -
 
     safe_name = _sanitize(plot_name)
 
-    # Line plot
     fig, ax = plt.subplots(figsize=(12, 5))
     numeric_df.plot(ax=ax, linewidth=1)
     ax.set_title(f"{plot_name} - Line plot")
@@ -106,7 +103,6 @@ def _plot_single_dataframe(df: pd.DataFrame, plot_name: str, output_dir: Path) -
     fig.savefig(line_path)
     plt.close(fig)
 
-    # Box plot
     fig, ax = plt.subplots(figsize=(12, 5))
     numeric_df.plot(kind="box", ax=ax, rot=45)
     ax.set_title(f"{plot_name} - Boxplot")
@@ -141,7 +137,6 @@ def _load_prices_from_excel(
         if df_sheet.empty:
             continue
 
-        # Standardize date column name
         date_col = next((c for c in df_sheet.columns if str(c).lower() == "date"), None)
         if date_col is None:
             continue
@@ -154,7 +149,6 @@ def _load_prices_from_excel(
         label_text = str(value_col)
         instrument, field = _parse_column_label(value_col)
 
-        # Skip excluded fields explicitly
         if field and field in exclude_fields:
             continue
         if not field and any(x.upper() in label_text.upper() for x in exclude_fields):
@@ -204,7 +198,6 @@ def plot_datastorage_price_development(
         datasets["dax_intraday_prices"] = storage_dir / "dax_intraday.xlsx"
         datasets["sdax_intraday_prices"] = storage_dir / "sdax_intraday.xlsx"
 
-    # Combined plots without TRDPRC_1
     preferred_main = preferred_fields or OPEN_CLOSE_FIELDS
     for name, path in datasets.items():
         df_main = _load_prices_from_excel(
@@ -217,7 +210,6 @@ def plot_datastorage_price_development(
         else:
             plot_data_overview(df_main, dataset_name=f"{name}_no_trdprc1", output_dir=output_dir)
 
-        # Separate TRDPRC_1-only plots
         df_trd = _load_prices_from_excel(path, preferred_fields=["TRDPRC_1"])
         if df_trd.empty:
             continue
