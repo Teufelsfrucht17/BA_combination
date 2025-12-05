@@ -39,6 +39,19 @@ class DataPrep:
         """
         self.config = ConfigManager(config_path)
 
+    def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        cleaned = df.copy()
+        cleaned = cleaned.replace([np.inf, -np.inf], np.nan)
+        cleaned = cleaned.drop_duplicates()
+        if isinstance(cleaned.index, (pd.DatetimeIndex, pd.PeriodIndex)):
+            cleaned = cleaned.sort_index()
+        numeric_cols = cleaned.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            cleaned[numeric_cols] = cleaned[numeric_cols].apply(
+                lambda col: col.clip(lower=col.quantile(0.01), upper=col.quantile(0.99))
+            )
+        return cleaned
+
     def prepare_data(
         self, 
         df: pd.DataFrame, 
@@ -81,6 +94,7 @@ class DataPrep:
             DataFrame with engineered features
         """
         df = df.copy()
+        df = self._clean_data(df)
         if 'Date' in df.columns and not isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
             df = df.set_index('Date')

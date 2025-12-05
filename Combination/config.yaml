@@ -46,6 +46,7 @@ features:
     - portfolio_index_change
     - vdax_absolute
     - volume_ratio
+    - rsi_14
     - rolling_volatility_10
     - rolling_volatility_20
 
