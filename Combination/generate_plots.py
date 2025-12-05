@@ -1,4 +1,4 @@
-"""Generate price development plots from DataStorage Excel files."""
+"""Generate DAX/SDAX plots from DataStorage Excel files."""
 
 from Plotting import plot_datastorage_price_development
 

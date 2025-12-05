@@ -57,7 +57,7 @@ features:
   volatility_windows: [10, 20]
 
 models:
-  active_models: ["pytorch_nn", "ols", "ridge","random_forest"]
+  active_models: ["pytorch_nn", "ols", "ridge"]
 
   pytorch_nn:
     enabled: true
