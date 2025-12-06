@@ -140,22 +140,160 @@ class FamaFrenchFactorModel:
         stock_cols: List[object],
     ) -> Tuple[pd.Series, pd.Series]:
         """
-        Compute SMB/HML; return 0 if fundamentals are missing.
+        Compute simplified SMB (Small minus Big) and HML (High minus Low)
+        based on market capitalization and book-to-market ratios.
+
+        Falls Fundamentaldaten nicht vorhanden oder unbrauchbar sind,
+        wird für beide Faktoren ein Nullvektor zurückgegeben.
         """
+        # Fallback: keine Fundamentaldaten
         if company_df is None or company_df.empty:
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
-        company_cols_upper = {str(c).upper(): c for c in company_df.columns}
-        has_mc = any("MARKETCAP" in col for col in company_cols_upper)
-        has_bv = any("BOOKVALUE" in col or "BVPS" in col for col in company_cols_upper)
+        df = company_df.copy()
 
-        if not (has_mc and has_bv):
+        # Datumsspalte herstellen
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+            date_col = df.columns[0]
+        elif "Date" in df.columns:
+            date_col = "Date"
+        else:
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
-        zero = pd.Series(0.0, index=returns_df.index)
-        return zero, zero
+        df = df.rename(columns={date_col: "Date"})
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date"])
+
+        # Instrumentspalte finden
+        instrument_col = None
+        for c in df.columns:
+            cname = str(c).strip().upper()
+            if cname in ("INSTRUMENT", "RIC", "TICKER"):
+                instrument_col = c
+                break
+
+        if instrument_col is None:
+            zero = pd.Series(0.0, index=returns_df.index)
+            return zero, zero
+
+        # Markt-Kapitalisierung und Buchwertspalten robust suchen
+        company_cols_upper = {str(c).upper(): c for c in df.columns}
+
+        mc_col = None
+        for up, orig in company_cols_upper.items():
+            if ("MARKET" in up and "CAP" in up) or "MARKETCAP" in up:
+                mc_col = orig
+                break
+
+        bv_col = None
+        for up, orig in company_cols_upper.items():
+            if ("BOOK" in up and "VALUE" in up) or "BVPS" in up:
+                bv_col = orig
+                break
+
+        if mc_col is None or bv_col is None:
+            zero = pd.Series(0.0, index=returns_df.index)
+            return zero, zero
+
+        df = df[["Date", instrument_col, mc_col, bv_col]].copy()
+        df = df.rename(columns={instrument_col: "Instrument", mc_col: "MC", bv_col: "BV"})
+
+        df["Instrument"] = df["Instrument"].astype(str).str.strip()
+        df["MC"] = pd.to_numeric(df["MC"], errors="coerce")
+        df["BV"] = pd.to_numeric(df["BV"], errors="coerce")
+        df = df.dropna(subset=["Instrument", "MC", "BV"])
+
+        if df.empty:
+            zero = pd.Series(0.0, index=returns_df.index)
+            return zero, zero
+
+        # Book-to-Market (BTM) berechnen
+        df["BTM"] = df["BV"] / df["MC"]
+        df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=["BTM"])
+
+        if df.empty:
+            zero = pd.Series(0.0, index=returns_df.index)
+            return zero, zero
+
+        # MultiIndex (Date, Instrument) für schnellen Zugriff
+        df = df.set_index(["Date", "Instrument"]).sort_index()
+
+        # Mapping von Preisspalten zu Instrumenten
+        col_to_inst = {}
+        for col in stock_cols:
+            inst = self._extract_stock_name(col)
+            if inst:
+                col_to_inst[col] = inst
+
+        smb_values = []
+        hml_values = []
+
+        for date in returns_df.index:
+            date_norm = pd.Timestamp(date).normalize()
+            cross_ret = returns_df.loc[date]
+
+            rows = []
+            for col, inst in col_to_inst.items():
+                r = cross_ret.get(col, np.nan)
+                if pd.isna(r):
+                    continue
+
+                key = (date_norm, inst)
+                try:
+                    if key in df.index:
+                        row = df.loc[key]
+                        if isinstance(row, pd.DataFrame):
+                            row = row.iloc[-1]
+                    else:
+                        # Fallback: letzter bekannter Wert <= Datum
+                        inst_data = df.xs(inst, level="Instrument", drop_level=False)
+                        inst_dates = inst_data.index.get_level_values("Date")
+                        mask = inst_dates <= date_norm
+                        if not mask.any():
+                            continue
+                        row = inst_data[mask].iloc[-1]
+                except Exception:
+                    continue
+
+                mc = row["MC"]
+                btm = row["BTM"]
+                if pd.isna(mc) or pd.isna(btm):
+                    continue
+
+                rows.append({"Instrument": inst, "MC": mc, "BTM": btm, "Ret": r})
+
+            if len(rows) < 2:
+                smb_values.append(np.nan)
+                hml_values.append(np.nan)
+                continue
+
+            cs = pd.DataFrame(rows)
+
+            mc_median = cs["MC"].median()
+            btm_median = cs["BTM"].median()
+
+            small = cs[cs["MC"] <= mc_median]
+            big = cs[cs["MC"] > mc_median]
+
+            high = cs[cs["BTM"] >= btm_median]
+            low = cs[cs["BTM"] < btm_median]
+
+            if len(small) == 0 or len(big) == 0:
+                smb_values.append(np.nan)
+            else:
+                smb_values.append(small["Ret"].mean() - big["Ret"].mean())
+
+            if len(high) == 0 or len(low) == 0:
+                hml_values.append(np.nan)
+            else:
+                hml_values.append(high["Ret"].mean() - low["Ret"].mean())
+
+        smb_series = pd.Series(smb_values, index=returns_df.index)
+        hml_series = pd.Series(hml_values, index=returns_df.index)
+        return smb_series, hml_series
 
     def _calculate_momentum_factor(self, returns_df: pd.DataFrame, lookback_period: int = 60) -> pd.Series:
         """Momentum factor (WML) with shorter lookback for robustness."""

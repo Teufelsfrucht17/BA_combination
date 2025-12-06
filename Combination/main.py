@@ -21,7 +21,9 @@ from logger_config import setup_logging
 
 def main() -> None:
     """Entry point"""
-    log_file = Path("Logs") / "main.log" if Path("Logs").exists() else None
+    log_dir = Path("Logs")
+    log_dir.mkdir(exist_ok=True)
+    log_file = log_dir / "main.log"
     setup_logging(log_level=logging.INFO, log_file=log_file)
     
     parser = argparse.ArgumentParser(
@@ -87,10 +89,12 @@ Features in config:
         config.set("features.input_features", args.features)
 
     if args.models:
-        for model in ['pytorch_nn', 'ols', 'ridge', 'random_forest']:
+        model_names = ['pytorch_nn', 'ols', 'ridge', 'random_forest']
+        for model in model_names:
             config.set(f"models.{model}.enabled", False)
         for model in args.models:
             config.set(f"models.{model}.enabled", True)
+        config.set("models.active_models", args.models)
 
     if args.no_save:
         config.set("output.save_models", False)

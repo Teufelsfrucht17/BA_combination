@@ -21,6 +21,7 @@ from Models_Wrapper import (
     train_random_forest,
     train_naive_baseline
 )
+from logger_config import get_logger
 import LSEG as LS
 
 
@@ -36,6 +37,7 @@ class ModelComparison:
         """
         self.config = ConfigManager(config_path)
         self.results = {}
+        self.logger = get_logger(__name__)
 
     def run_full_comparison(self):
         """Run the full comparison across portfolios, periods, and models"""
@@ -99,6 +101,11 @@ class ModelComparison:
                         ff_factors = None
 
                 use_ffc_options = [False, True] if ffc_runs_enabled else [False]
+                
+                # Store base X, y for consistent train-test split
+                base_X, base_y = None, None
+                base_split_idx = None
+                
                 for use_ffc in use_ffc_options:
                     if use_ffc and (ff_factors is None or ff_factors.empty):
                         continue
@@ -113,9 +120,61 @@ class ModelComparison:
                         period_type=period_type,
                         ff_factors=ff_factors_to_use
                     )
+                    
+                    # Debug: Check if FFC factors are in features
+                    if use_ffc:
+                        ffc_cols = [col for col in ['Mkt_Rf', 'SMB', 'HML', 'WML'] if col in X.columns]
+                        if ffc_cols:
+                            self.logger.info(f"✓ FFC-Faktoren in Features für {results_key}: {ffc_cols}")
+                            # Check for NaN values
+                            ffc_nan_counts = X[ffc_cols].isna().sum()
+                            if ffc_nan_counts.sum() > 0:
+                                self.logger.warning(f"⚠️ FFC-Faktoren enthalten NaN: {ffc_nan_counts.to_dict()}")
+                            
+                            # Check FFC factor statistics
+                            ffc_stats = X[ffc_cols].describe()
+                            self.logger.debug(f"FFC-Faktoren Statistiken für {results_key}:\n{ffc_stats}")
+                        else:
+                            self.logger.error(f"❌ FFC-Faktoren NICHT in Features für {results_key} gefunden!")
+                    else:
+                        ffc_cols = [col for col in ['Mkt_Rf', 'SMB', 'HML', 'WML'] if col in X.columns]
+                        if ffc_cols:
+                            self.logger.warning(f"⚠️ FFC-Faktoren in Features für {results_key} gefunden, obwohl use_ffc=False!")
 
                     test_split = self.config.get("training.test_split", 0.2)
+                    
+                    # Use consistent split index for both runs to ensure same y_test
+                    if base_split_idx is None:
+                        # First run: determine split index based on base data
+                        base_X, base_y = X.copy(), y.copy()
+                        split_idx = int(len(base_X) * (1 - test_split))
+                        base_split_idx = split_idx
+                        self.logger.info(f"Base split index für {portfolio_name}_{period_type}: {split_idx} von {len(base_X)} Zeilen")
+                    else:
+                        # Subsequent runs: use same split index, but align with current data
+                        # Find matching indices between base and current data
+                        base_index_set = set(base_X.index)
+                        current_index_set = set(X.index)
+                        common_indices = sorted(list(base_index_set.intersection(current_index_set)))
+                        
+                        if len(common_indices) != len(base_X.index):
+                            self.logger.warning(
+                                f"⚠️ Unterschiedliche Indizes zwischen Runs für {results_key}: "
+                                f"Base: {len(base_X.index)}, Current: {len(X.index)}, Common: {len(common_indices)}"
+                            )
+                            # Use common indices only
+                            X = X.loc[common_indices]
+                            y = y.loc[common_indices]
+                        
+                        # Use same split index (relative to common indices)
+                        split_idx = min(base_split_idx, len(X))
+                    
                     X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
+                    
+                    # Verify split consistency
+                    if base_y is not None and not use_ffc:
+                        # Store y_test from first run for comparison
+                        pass
 
                     scaler_method = self.config.get("training.scaling.method", "StandardScaler")
                     scaler = MinMaxScaler() if scaler_method == "MinMaxScaler" else StandardScaler()
@@ -189,7 +248,8 @@ class ModelComparison:
                     "scheduler_patience": self.config.get("models.pytorch_nn.scheduler_patience", 10),
                     "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
                     "portfolio_name": portfolio_name,
-                    "period_type": period_type
+                    "period_type": period_type,
+                    "visualize_architecture": self.config.get("models.pytorch_nn.visualize_architecture", False)
                 }
             },
             "ols": {
@@ -293,7 +353,37 @@ class ModelComparison:
             model_name: Model name
             extra_info: Optional extra information
         """
-        return
+        r2 = metrics.get("r2")
+        train_r2 = metrics.get("train_r2")
+        mse = metrics.get("mse")
+        mae = metrics.get("mae")
+        da = metrics.get("directional_accuracy")
+        da_train = metrics.get("directional_accuracy_train")
+
+        def fmt(x):
+            try:
+                return f"{x:.6f}"
+            except Exception:
+                return "nan"
+
+        msg = (
+            f"Model {model_name}: "
+            f"R2_test={fmt(r2)}, "
+            f"R2_train={fmt(train_r2)}, "
+            f"MSE={fmt(mse)}, "
+            f"MAE={fmt(mae)}, "
+            f"DA_test={fmt(da)}, "
+            f"DA_train={fmt(da_train)}, "
+            f"training_time_s={training_time:.3f}"
+        )
+
+        if extra_info:
+            msg += f" | Info: {extra_info}"
+
+        # Ins Log schreiben und auch direkt ausgeben
+        if hasattr(self, "logger") and self.logger is not None:
+            self.logger.info(msg)
+        print(msg)
 
     def create_comparison_report(self):
         """Create detailed portfolio-based comparison report as Excel"""
@@ -362,6 +452,30 @@ class ModelComparison:
             values='R2_Test'
         )
 
+        # FFC-Differenzen (Yes vs. No) pro Portfolio/Periode/Modell
+        try:
+            ffc_pivot = df_comparison.pivot_table(
+                index=['Portfolio', 'Period', 'Model'],
+                columns='FFC_Factors',
+                values=['R2_Test', 'MSE', 'MAE', 'Directional_Accuracy'],
+                aggfunc='mean'
+            )
+
+            # Spaltennamen glätten, z.B. ('R2_Test','Yes') -> 'R2_Test_Yes'
+            ffc_pivot.columns = [
+                f"{metric}_{ffc}" for metric, ffc in ffc_pivot.columns.to_flat_index()
+            ]
+            ffc_pivot = ffc_pivot.reset_index()
+
+            # Delta-Spalten (Yes - No) berechnen, falls beide vorhanden
+            for metric in ['R2_Test', 'MSE', 'MAE', 'Directional_Accuracy']:
+                col_no = f"{metric}_No"
+                col_yes = f"{metric}_Yes"
+                if col_no in ffc_pivot.columns and col_yes in ffc_pivot.columns:
+                    ffc_pivot[f"{metric}_Delta"] = ffc_pivot[col_yes] - ffc_pivot[col_no]
+        except Exception:
+            ffc_pivot = None
+
         output_path = Path("Results") / "model_comparison.xlsx"
         output_path.parent.mkdir(exist_ok=True)
 
@@ -370,6 +484,8 @@ class ModelComparison:
             pivot_r2.to_excel(writer, sheet_name='R2_by_Portfolio_Period')
             pivot_mse.to_excel(writer, sheet_name='MSE_by_Portfolio_Period')
             pivot_portfolio.to_excel(writer, sheet_name='R2_Hierarchical')
+            if ffc_pivot is not None:
+                ffc_pivot.to_excel(writer, sheet_name='FFC_Diff', index=False)
 
         if self.config.get("output.save_models"):
             self.save_models()

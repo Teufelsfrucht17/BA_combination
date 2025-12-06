@@ -87,7 +87,7 @@ class DataPrep:
         elif not isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)):
             df.index = pd.to_datetime(df.index, errors='coerce')
 
-        price_like = [col for col in df.columns if 'TRDPRC_1' in str(col) or 'Price' in str(col)]
+        price_like = [col for col in df.columns if 'TRDPRC_1' in str(col) or 'Price' in str(col) or 'HIGH_1' in str(col) or 'LOW_1' in str(col)]
         volume_like = [col for col in df.columns if 'VOLUME' in str(col) or 'ACVOL_1' in str(col)]
         if price_like:
             df[price_like] = df[price_like].ffill().bfill()
@@ -104,16 +104,36 @@ class DataPrep:
             index_identifier = None
             index_feature_name = "portfolio_index_change"
 
-        stock_columns = [col for col in df.columns if '.DE' in str(col) and 'TRDPRC_1' in str(col)]
+        stock_price_cols = [col for col in df.columns if '.DE' in str(col) and 'TRDPRC_1' in str(col)]
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = ['_'.join(map(str, col)).strip() for col in df.columns.values]
-            stock_columns = [col for col in df.columns if '.DE' in col and 'TRDPRC_1' in col]
+            stock_price_cols = [col for col in df.columns if '.DE' in col and 'TRDPRC_1' in col]
 
-        if len(stock_columns) > 0:
-            portfolio_prices = df[stock_columns].mean(axis=1)
+        if len(stock_price_cols) > 0:
+            # Fall 1: Es gibt echte TRDPRC_1-Preise für die Aktien -> wie bisher Mittelwert
+            portfolio_prices = df[stock_price_cols].mean(axis=1)
         else:
-            portfolio_prices = df.select_dtypes(include=[np.number]).iloc[:, 0]
+            # Fall 2: Keine TRDPRC_1 für Aktien (z.B. sdax_daily) -> Mid-Price aus HIGH_1 und LOW_1
+            high_cols = [c for c in df.columns if '.DE' in str(c) and 'HIGH_1' in str(c)]
+            low_cols = [c for c in df.columns if '.DE' in str(c) and 'LOW_1' in str(c)]
+
+            mid_series = []
+            for h_col in high_cols:
+                stem = str(h_col).replace('HIGH_1', '').rstrip('_')
+                # Versuche ein passendes LOW_1 zu finden (MultiIndex- oder String-Namen tolerant)
+                candidates = [c for c in low_cols if str(c).startswith(stem)]
+                if not candidates:
+                    continue
+                l_col = candidates[0]
+                mid = (df[h_col] + df[l_col]) / 2.0
+                mid_series.append(mid)
+
+            if mid_series:
+                portfolio_prices = pd.concat(mid_series, axis=1).mean(axis=1)
+            else:
+                # letzter Fallback: erste numerische Spalte
+                portfolio_prices = df.select_dtypes(include=[np.number]).iloc[:, 0]
 
         for period in self.config.get("features.momentum_periods", [5, 10, 20]):
             features[f'momentum_{period}'] = portfolio_prices.pct_change(period)
@@ -147,12 +167,8 @@ class DataPrep:
         if 'rsi_14' in self.config.get("features.input_features", []):
             features['rsi_14'] = self.calculate_rsi(portfolio_prices, period=14)
 
-        if len(stock_columns) > 0:
-            clipped = df[stock_columns].clip(lower=DEFAULT_EPSILON)
-            portfolio_returns = np.log(clipped / clipped.shift(1)).mean(axis=1)
-        else:
-            clipped = portfolio_prices.clip(lower=DEFAULT_EPSILON)
-            portfolio_returns = np.log(clipped / clipped.shift(1))
+        clipped = portfolio_prices.clip(lower=DEFAULT_EPSILON)
+        portfolio_returns = np.log(clipped / clipped.shift(1))
 
         features['price_change_next'] = portfolio_returns.shift(-1)
 
@@ -185,33 +201,90 @@ class DataPrep:
 
         features = features.dropna(subset=['price_change_next'])
 
-        fillable_cols = [c for c in features.columns if c not in ['price_change_next', 'price_direction_next']]
-        features[fillable_cols] = features[fillable_cols].ffill()
-        features = features.dropna()
-
+        # Add FFC factors BEFORE dropna() to ensure they are included
         if ff_factors is not None and not ff_factors.empty:
-            if isinstance(features.index, pd.DatetimeIndex) and isinstance(ff_factors.index, pd.DatetimeIndex):
-                if period_type == "intraday" or features.index.hour.nunique() > 1:
-                    features_date = features.index.normalize()
-                    ff_factors_date = ff_factors.index.normalize()
+            # Use a robust merge to join Fama-French factors.
+            # This handles both daily and intraday data by merging on the normalized date.
+            ff_factors_daily = ff_factors.copy()
+            ff_factors_daily.index = pd.to_datetime(ff_factors_daily.index).normalize()
+
+            # Create a temporary key on the features DataFrame for the merge
+            features['merge_key'] = pd.to_datetime(features.index).normalize()
+
+            ff_cols_to_merge = [col for col in ['Mkt_Rf', 'SMB', 'HML', 'WML'] if col in ff_factors_daily.columns]
+
+            if ff_cols_to_merge:
+                # Store original feature count
+                n_features_before = len(features.columns)
+                
+                features = pd.merge(
+                    features,
+                    ff_factors_daily[ff_cols_to_merge],
+                    left_on='merge_key',
+                    right_index=True,
+                    how='left',
+                    sort=False  # Preserve the original time-series order
+                )
+                
+                # Check if FFC factors were actually added
+                n_features_after = len(features.columns)
+                ffc_added = [col for col in ff_cols_to_merge if col in features.columns]
+                
+                if len(ffc_added) > 0:
+                    # Check for NaN values in FFC columns
+                    ffc_nan_counts = features[ffc_added].isna().sum()
+                    total_rows = len(features)
+                    ffc_valid_ratio = (total_rows - ffc_nan_counts.max()) / total_rows if total_rows > 0 else 0
                     
-                    ff_dict = {}
-                    for date, row in ff_factors.iterrows():
-                        date_only = pd.Timestamp(date).normalize()
-                        if date_only not in ff_dict:
-                            ff_dict[date_only] = row
-                    
-                    for date_idx in features.index:
-                        date_only = pd.Timestamp(date_idx).normalize()
-                        if date_only in ff_dict:
-                            ff_row = ff_dict[date_only]
-                            for col in ['Mkt_Rf', 'SMB', 'HML', 'WML']:
-                                if col in ff_row:
-                                    features.loc[date_idx, col] = ff_row[col]
-                else:
-                    for col in ['Mkt_Rf', 'SMB', 'HML', 'WML']:
-                        if col in ff_factors.columns:
-                            features[col] = ff_factors[col]
+                    # Only warn if most values are NaN
+                    if ffc_valid_ratio < 0.5:
+                        import logging
+                        logger = logging.getLogger(__name__)
+                        logger.warning(
+                            f"FFC-Faktoren wurden hinzugefügt, aber {ffc_nan_counts.max()} von {total_rows} "
+                            f"Werten sind NaN. Validitätsrate: {ffc_valid_ratio:.2%}"
+                        )
+            else:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"FFC-Faktoren DataFrame vorhanden, aber keine erwarteten Spalten gefunden. "
+                    f"Verfügbare Spalten: {list(ff_factors_daily.columns)}"
+                )
+
+            # Clean up the temporary key
+            if 'merge_key' in features.columns:
+                features = features.drop(columns=['merge_key'])
+
+        # Identify FFC factor columns before filling
+        ff_feature_names = ['Mkt_Rf', 'SMB', 'HML', 'WML']
+        ffc_cols = [col for col in ff_feature_names if col in features.columns]
+        
+        # Fill missing values for all columns except target and FFC factors
+        # FFC factors should be filled separately to preserve their structure
+        fillable_cols = [c for c in features.columns if c not in ['price_change_next', 'price_direction_next'] + ffc_cols]
+        if fillable_cols:
+            features[fillable_cols] = features[fillable_cols].ffill()
+        
+        # For FFC factors, forward fill and backward fill to minimize NaN values
+        if ffc_cols:
+            # Forward fill and backward fill FFC factors to preserve as much data as possible
+            features[ffc_cols] = features[ffc_cols].ffill().bfill()
+            
+            # Log FFC factor statistics
+            import logging
+            logger = logging.getLogger(__name__)
+            ffc_nan_after_fill = features[ffc_cols].isna().sum()
+            if ffc_nan_after_fill.sum() > 0:
+                logger.warning(f"FFC-Faktoren haben nach ffill/bfill noch NaN: {ffc_nan_after_fill.to_dict()}")
+            
+            # Only drop rows where non-FFC features are NaN
+            non_ffc_cols = [c for c in features.columns if c not in ffc_cols and c != 'price_direction_next']
+            features = features.dropna(subset=non_ffc_cols)
+        else:
+            # No FFC factors, drop all NaN rows as before (except target)
+            features = features.dropna(subset=[c for c in features.columns if c not in ['price_change_next', 'price_direction_next']])
+
         features['price_direction_next'] = (features['price_change_next'] > 0).astype(int)
 
         return features
@@ -260,13 +333,46 @@ class DataPrep:
         available_features = [f for f in input_features if f in features_df.columns]
         missing_features = set(input_features) - set(available_features)
 
+        # Wenn Fama-French-Faktoren vorhanden sind, immer mit aufnehmen (nur im FFC-Run vorhanden)
+        ff_feature_names = ['Mkt_Rf', 'SMB', 'HML', 'WML']
+        ffc_features_found = []
+        for col in ff_feature_names:
+            if col in features_df.columns and col not in available_features:
+                available_features.append(col)
+                ffc_features_found.append(col)
+        
+        # Debug: Log if FFC features are present
+        if ffc_features_found:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"FFC-Faktoren in Features aufgenommen: {ffc_features_found}")
+            # Check for NaN values
+            ffc_nan_info = features_df[ffc_features_found].isna().sum()
+            if ffc_nan_info.sum() > 0:
+                logger.warning(f"FFC-Faktoren enthalten NaN-Werte: {ffc_nan_info.to_dict()}")
+
         if len(available_features) == 0:
             available_features = list(features_df.columns)
 
         X = features_df[available_features].copy()
         y = features_df[target].copy()
 
-        common_index = X.dropna().index.intersection(y.dropna().index)
+        # Don't drop rows based on FFC factors - they may have NaN values
+        # Only drop rows where non-FFC features or target are NaN
+        ff_feature_names = ['Mkt_Rf', 'SMB', 'HML', 'WML']
+        ffc_cols_in_X = [col for col in ff_feature_names if col in X.columns]
+        non_ffc_cols = [col for col in X.columns if col not in ffc_cols_in_X]
+        
+        if non_ffc_cols:
+            # Drop rows where non-FFC features are NaN
+            X_valid = X[non_ffc_cols].dropna()
+            y_valid = y.dropna()
+            common_index = X_valid.index.intersection(y_valid.index)
+        else:
+            # All columns are FFC factors, only check target
+            y_valid = y.dropna()
+            common_index = y_valid.index
+        
         X = X.loc[common_index]
         y = y.loc[common_index]
 

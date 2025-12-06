@@ -20,6 +20,8 @@ from sklearn.pipeline import Pipeline
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 
 DEFAULT_RANDOM_SEED = 42
 DEFAULT_VALIDATION_SPLIT = 0.2
@@ -59,6 +61,64 @@ class SimpleNet(nn.Module):
         return self.net(x)
 
 
+def visualize_simple_net(in_features: int, hidden1: int, hidden2: int, out_features: int = 1) -> None:
+    """
+    Visualize the SimpleNet architecture using matplotlib.
+
+    Draws rectangular boxes for each layer from left to right and arrows
+    between their centers to indicate data flow.
+    """
+    fig, ax = plt.subplots(figsize=(10, 3))
+
+    layers = [
+        (f"Input ({in_features} features)", 0.5),
+        (f"Hidden Layer 1\n({hidden1}, ReLU, Dropout 0.2)", 1.5),
+        (f"Hidden Layer 2\n({hidden2}, ReLU, Dropout 0.2)", 2.5),
+        (f"Output\n({out_features}, regression)", 3.5),
+    ]
+
+    box_width = 0.8
+    box_height = 0.5
+    y_center = 0.5
+
+    for label, x_center in layers:
+        lower_left = (x_center - box_width / 2, y_center - box_height / 2)
+        rect = Rectangle(
+            lower_left,
+            box_width,
+            box_height,
+            linewidth=1.5,
+            edgecolor="black",
+            facecolor="#e6e6e6",
+        )
+        ax.add_patch(rect)
+        ax.text(
+            x_center,
+            y_center,
+            label,
+            ha="center",
+            va="center",
+            fontsize=10,
+        )
+
+    for i in range(len(layers) - 1):
+        x_start = layers[i][1] + box_width / 2
+        x_end = layers[i + 1][1] - box_width / 2
+        ax.annotate(
+            "",
+            xy=(x_end, y_center),
+            xytext=(x_start, y_center),
+            arrowprops=dict(arrowstyle="->", linewidth=1.5, color="black"),
+        )
+
+    ax.set_xlim(0, 4)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
 def train_pytorch_model(
     X_train: Union[pd.DataFrame, np.ndarray],
     y_train: Union[pd.Series, np.ndarray],
@@ -76,7 +136,8 @@ def train_pytorch_model(
     weight_decay: float = 0.0,
     standardize_target: bool = True,
     portfolio_name: Optional[str] = None,
-    period_type: Optional[str] = None
+    period_type: Optional[str] = None,
+    visualize_architecture: bool = False
 ) -> Tuple[nn.Module, Dict[str, Any]]:
     """
     Train a PyTorch MLP with two hidden layers, dropout, early stopping, and an optional LR scheduler.
@@ -142,6 +203,9 @@ def train_pytorch_model(
 
     n_features = X_train_t.shape[1]
     model = SimpleNet(in_features=n_features, hidden1=hidden1, hidden2=hidden2, out_features=1).to(device)
+
+    if visualize_architecture:
+        visualize_simple_net(in_features=n_features, hidden1=hidden1, hidden2=hidden2, out_features=1)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.MSELoss()
@@ -260,6 +324,18 @@ def train_ols(
 
     y_train_pred = model.predict(X_train)
     y_test_pred = model.predict(X_test)
+    
+    # Debug: Check if predictions have different signs
+    if isinstance(X_test, pd.DataFrame):
+        ffc_cols = [col for col in ['Mkt_Rf', 'SMB', 'HML', 'WML'] if col in X_test.columns]
+        if ffc_cols:
+            # Log FFC factor coefficients
+            feature_names = X_test.columns.tolist()
+            coef_dict = dict(zip(feature_names, model.coef_))
+            ffc_coefs = {col: coef_dict.get(col, 0) for col in ffc_cols}
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"OLS FFC-Faktor Koeffizienten: {ffc_coefs}")
 
     metrics = {
         'r2': r2_score(y_test, y_test_pred),
