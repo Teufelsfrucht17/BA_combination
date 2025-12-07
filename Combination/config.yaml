@@ -1,6 +1,7 @@
 data:
   portfolios:
     dax:
+      enabled: false
       name: "DAX Portfolio"
       universe:
         - RHMG.DE
@@ -13,6 +14,7 @@ data:
       index_feature: "change_dax"
 
     sdax:
+      enabled: true
       name: "SDAX Portfolio"
       universe:
         - 1U1.DE
@@ -33,6 +35,12 @@ data:
     - "LOW_1"
     - "TRDPRC_1"
     - "ACVOL_1"
+
+  periods:
+    daily:
+      enabled: true
+    intraday:
+      enabled: false
 
 
 
@@ -56,7 +64,7 @@ features:
   volatility_windows: [10, 20]
 
 models:
-  active_models: ["pytorch_nn", "ols", "ridge"]
+  active_models: ["pytorch_nn", "ols"]
 
   pytorch_nn:
     enabled: true
@@ -74,7 +82,7 @@ models:
     enabled: true
 
   ridge:
-    enabled: true
+    enabled: false
     alpha_values: [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
 
   random_forest:
@@ -82,6 +90,9 @@ models:
     n_estimators: 300
     max_depth: 10
     min_samples_split: 5
+
+  naive_baseline:
+    enabled: false
 
 training:
   ffc_runs: true

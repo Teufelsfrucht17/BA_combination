@@ -37,13 +37,31 @@ class DataGrabber:
         """
         all_data: Dict[str, Dict[str, pd.DataFrame]] = {}
         portfolios = self.config.get("data.portfolios", {})
+        periods_cfg = self.config.get("data.periods", {})
 
-        for portfolio_name in portfolios.keys():
-            all_data[portfolio_name] = {}
+        def _period_enabled(name: str) -> bool:
+            cfg = periods_cfg.get(name, {})
+            if isinstance(cfg, dict):
+                return cfg.get("enabled", True)
+            return True
 
-            all_data[portfolio_name]["daily"] = self.fetch_portfolio_data(portfolio_name, "daily")
+        for portfolio_name, portfolio_cfg in portfolios.items():
+            enabled = True
+            if isinstance(portfolio_cfg, dict):
+                enabled = portfolio_cfg.get("enabled", True)
+            if not enabled:
+                continue
 
-            all_data[portfolio_name]["intraday"] = self.fetch_portfolio_data(portfolio_name, "intraday")
+            portfolio_periods: Dict[str, pd.DataFrame] = {}
+
+            if _period_enabled("daily"):
+                portfolio_periods["daily"] = self.fetch_portfolio_data(portfolio_name, "daily")
+
+            if _period_enabled("intraday"):
+                portfolio_periods["intraday"] = self.fetch_portfolio_data(portfolio_name, "intraday")
+
+            if portfolio_periods:
+                all_data[portfolio_name] = portfolio_periods
 
         return all_data
 
@@ -137,8 +155,14 @@ class DataGrabber:
         all_company_data: Dict[str, pd.DataFrame] = {}
         portfolios = self.config.get("data.portfolios", {})
 
-        for portfolio_name in portfolios.keys():
-            portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
+        for portfolio_name, portfolio_cfg in portfolios.items():
+            enabled = True
+            if isinstance(portfolio_cfg, dict):
+                enabled = portfolio_cfg.get("enabled", True)
+            if not enabled:
+                continue
+
+            portfolio_config = portfolio_cfg or self.config.get(f"data.portfolios.{portfolio_name}")
             universe = portfolio_config["universe"]
 
             period_config = self.config.get("data.periods.daily")

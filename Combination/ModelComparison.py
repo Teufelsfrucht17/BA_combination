@@ -226,7 +226,7 @@ class ModelComparison:
 
         model_configs = {
             "naive_baseline": {
-                "enabled": True,
+                "enabled": self.config.get("models.naive_baseline.enabled", True),
                 "train_func": train_naive_baseline,
                 "display_name": "Baseline Model (Naive Predictor)",
                 "get_kwargs": lambda: {},

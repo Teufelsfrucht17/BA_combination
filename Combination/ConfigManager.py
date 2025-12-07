@@ -18,12 +18,14 @@ DEFAULT_CONFIG = {
             "daily": {
                 "interval": "daily",
                 "start": "2024-01-01",
-                "end": "2025-11-15"
+                "end": "2025-11-15",
+                "enabled": True
             },
             "intraday": {
                 "interval": "30min",
                 "start": "2024-01-01",
-                "end": "2025-11-15"
+                "end": "2025-11-15",
+                "enabled": True
             }
         }
     },
@@ -60,6 +62,9 @@ DEFAULT_CONFIG = {
             "n_estimators": 300,
             "max_depth": 10,
             "min_samples_split": 5
+        },
+        "naive_baseline": {
+            "enabled": True
         }
     },
     "training": {
