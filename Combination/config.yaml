@@ -56,6 +56,7 @@ features:
     - volume_ratio
     - rolling_volatility_10
     - rolling_volatility_20
+    - rsi_14
 
   target: "price_change_next"
 
