@@ -22,6 +22,10 @@ from Models_Wrapper import (
     train_naive_baseline
 )
 import LSEG as LS
+from logger_config import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class ModelComparison:
@@ -113,6 +117,22 @@ class ModelComparison:
                         period_type=period_type,
                         ff_factors=ff_factors_to_use
                     )
+
+                    if use_ffc:
+                        ff_cols_in_x = [c for c in ['Mkt_Rf', 'SMB', 'HML', 'WML'] if c in X.columns]
+                        if ff_cols_in_x:
+                            logger.info(
+                                "FFC-Faktoren in Features für %s_%s_FFC: %s",
+                                portfolio_name,
+                                period_type,
+                                ff_cols_in_x
+                            )
+                        else:
+                            logger.warning(
+                                "FFC-Run ohne FFC-Faktoren in X für %s_%s_FFC",
+                                portfolio_name,
+                                period_type
+                            )
 
                     test_split = self.config.get("training.test_split", 0.2)
                     X_train, X_test, y_train, y_test = time_series_split(X, y, test_size=test_split)
@@ -362,6 +382,32 @@ class ModelComparison:
             values='R2_Test'
         )
 
+        ffc_diff = None
+        unique_ffc_flags = set(df_comparison.get("FFC_Factors", []))
+        if {"Yes", "No"}.issubset(unique_ffc_flags):
+            metrics = ["R2_Test", "MSE", "MAE", "Directional_Accuracy"]
+            pivot_ffc = df_comparison.pivot_table(
+                index=["Portfolio", "Period", "Model"],
+                columns="FFC_Factors",
+                values=metrics
+            )
+
+            if not pivot_ffc.empty:
+                pivot_ffc.columns = [f"{metric}_{flag}" for metric, flag in pivot_ffc.columns]
+
+                if all(col in pivot_ffc.columns for col in ["R2_Test_No", "R2_Test_Yes"]):
+                    pivot_ffc["R2_Test_Delta"] = pivot_ffc["R2_Test_Yes"] - pivot_ffc["R2_Test_No"]
+                if all(col in pivot_ffc.columns for col in ["MSE_No", "MSE_Yes"]):
+                    pivot_ffc["MSE_Delta"] = pivot_ffc["MSE_Yes"] - pivot_ffc["MSE_No"]
+                if all(col in pivot_ffc.columns for col in ["MAE_No", "MAE_Yes"]):
+                    pivot_ffc["MAE_Delta"] = pivot_ffc["MAE_Yes"] - pivot_ffc["MAE_No"]
+                if all(col in pivot_ffc.columns for col in ["Directional_Accuracy_No", "Directional_Accuracy_Yes"]):
+                    pivot_ffc["Directional_Accuracy_Delta"] = (
+                        pivot_ffc["Directional_Accuracy_Yes"] - pivot_ffc["Directional_Accuracy_No"]
+                    )
+
+                ffc_diff = pivot_ffc.reset_index()
+
         output_path = Path("Results") / "model_comparison.xlsx"
         output_path.parent.mkdir(exist_ok=True)
 
@@ -370,6 +416,8 @@ class ModelComparison:
             pivot_r2.to_excel(writer, sheet_name='R2_by_Portfolio_Period')
             pivot_mse.to_excel(writer, sheet_name='MSE_by_Portfolio_Period')
             pivot_portfolio.to_excel(writer, sheet_name='R2_Hierarchical')
+            if ffc_diff is not None:
+                ffc_diff.to_excel(writer, sheet_name="FFC_Diff", index=False)
 
         if self.config.get("output.save_models"):
             self.save_models()

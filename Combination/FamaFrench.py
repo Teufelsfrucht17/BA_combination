@@ -12,6 +12,7 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 from ConfigManager import ConfigManager
+from logger_config import get_logger
 
 
 class FamaFrenchFactorModel:
@@ -20,6 +21,7 @@ class FamaFrenchFactorModel:
     def __init__(self, config_path: str = "config.yaml"):
         self.config = ConfigManager(config_path)
         self.risk_free_rate = self.config.get("features.risk_free_rate", 0.027)
+        self.logger = get_logger(__name__)
 
     @staticmethod
     def _normalize_index(df: pd.DataFrame, date_column: str = "Date") -> pd.DataFrame:
@@ -46,6 +48,12 @@ class FamaFrenchFactorModel:
         if isinstance(col, tuple) and len(col) > 0:
             return str(col[0]).strip()
         col_str = str(col)
+        if ".DE" in col_str:
+            end = col_str.find(".DE") + len(".DE")
+            start = end - 1
+            while start > 0 and col_str[start - 1] not in " ,('\"":
+                start -= 1
+            return col_str[start:end].strip()
         return col_str.split("_")[0].strip()
 
     def _find_stock_price_columns(self, prices: pd.DataFrame) -> List[object]:
@@ -140,22 +148,164 @@ class FamaFrenchFactorModel:
         stock_cols: List[object],
     ) -> Tuple[pd.Series, pd.Series]:
         """
-        Compute SMB/HML; return 0 if fundamentals are missing.
+        Compute SMB (Small Minus Big) and HML (High Minus Low) factors.
+
+        Uses fundamental data per instrument and date:
+        - Size proxy: company market capitalization
+        - Value proxy: book-to-market ratio (book value per share * shares / market cap)
+
+        Falls back to 0 series if required fields are missing.
         """
         if company_df is None or company_df.empty:
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
-        company_cols_upper = {str(c).upper(): c for c in company_df.columns}
-        has_mc = any("MARKETCAP" in col for col in company_cols_upper)
-        has_bv = any("BOOKVALUE" in col or "BVPS" in col for col in company_cols_upper)
+        cols_lower = {str(c).lower(): c for c in company_df.columns}
 
-        if not (has_mc and has_bv):
+        instrument_col = None
+        for key, col in cols_lower.items():
+            if "instrument" in key:
+                instrument_col = col
+                break
+
+        mc_col = None
+        for key, col in cols_lower.items():
+            if "market" in key and "capital" in key:
+                mc_col = col
+                break
+
+        bvps_col = None
+        # Prefer „Book Value Per Share - Actual“
+        for key, col in cols_lower.items():
+            if "book value per share - actual" in key or ("bvps" in key and "actual" in key):
+                bvps_col = col
+                break
+        if bvps_col is None:
+            for key, col in cols_lower.items():
+                if "book value per share" in key or "bvps" in key:
+                    bvps_col = col
+                    break
+
+        shares_col = None
+        for key, col in cols_lower.items():
+            if "number of shares outstanding" in key:
+                shares_col = col
+                break
+        if shares_col is None:
+            for key, col in cols_lower.items():
+                if "outstanding shares" in key:
+                    shares_col = col
+                    break
+
+        if instrument_col is None or mc_col is None:
+            self.logger.warning(
+                "Cannot compute SMB/HML – missing instrument or market cap column "
+                "(instrument_col=%s, mc_col=%s)",
+                instrument_col,
+                mc_col,
+            )
             zero = pd.Series(0.0, index=returns_df.index)
             return zero, zero
 
-        zero = pd.Series(0.0, index=returns_df.index)
-        return zero, zero
+        # Map ticker -> price/return column
+        ticker_to_col = {}
+        for col in stock_cols:
+            ticker = self._extract_stock_name(col)
+            if ticker and ticker not in ticker_to_col:
+                ticker_to_col[ticker] = col
+
+        smb_values = []
+        hml_values = []
+        index_vals = []
+
+        for date in returns_df.index:
+            if date not in company_df.index:
+                index_vals.append(date)
+                smb_values.append(np.nan)
+                hml_values.append(np.nan)
+                continue
+
+            sub = company_df.loc[date]
+            if isinstance(sub, pd.Series):
+                sub = sub.to_frame().T
+
+            rows = []
+            for _, row in sub.iterrows():
+                inst = row.get(instrument_col)
+                if pd.isna(inst):
+                    continue
+
+                ticker = str(inst).strip()
+                price_col = ticker_to_col.get(ticker)
+                if price_col is None or price_col not in returns_df.columns:
+                    continue
+
+                ret = returns_df.at[date, price_col]
+                if pd.isna(ret):
+                    continue
+
+                mc = row.get(mc_col)
+                if pd.isna(mc) or mc <= 0:
+                    continue
+
+                entry = {"ticker": ticker, "ret": float(ret), "mc": float(mc)}
+
+                if bvps_col is not None and shares_col is not None:
+                    bvps = row.get(bvps_col)
+                    shares = row.get(shares_col)
+                    if pd.notna(bvps) and pd.notna(shares) and shares > 0:
+                        try:
+                            bm = float(bvps) * float(shares) / float(mc)
+                        except ZeroDivisionError:
+                            bm = np.nan
+                    else:
+                        bm = np.nan
+                    entry["bm"] = bm
+
+                rows.append(entry)
+
+            index_vals.append(date)
+
+            if len(rows) < 2:
+                smb_values.append(np.nan)
+                hml_values.append(np.nan)
+                continue
+
+            cross = pd.DataFrame(rows)
+
+            # SMB: Small minus Big by median market cap
+            median_mc = cross["mc"].median()
+            small = cross[cross["mc"] <= median_mc]
+            big = cross[cross["mc"] > median_mc]
+            if len(small) == 0 or len(big) == 0:
+                smb_t = np.nan
+            else:
+                smb_t = small["ret"].mean() - big["ret"].mean()
+
+            # HML: High minus Low by book-to-market
+            if "bm" in cross.columns:
+                valid_bm = cross.dropna(subset=["bm"])
+                if len(valid_bm) >= 2:
+                    q30 = valid_bm["bm"].quantile(0.3)
+                    q70 = valid_bm["bm"].quantile(0.7)
+                    value = valid_bm[valid_bm["bm"] >= q70]
+                    growth = valid_bm[valid_bm["bm"] <= q30]
+                    if len(value) > 0 and len(growth) > 0:
+                        hml_t = value["ret"].mean() - growth["ret"].mean()
+                    else:
+                        hml_t = np.nan
+                else:
+                    hml_t = np.nan
+            else:
+                hml_t = np.nan
+
+            smb_values.append(smb_t)
+            hml_values.append(hml_t)
+
+        smb_series = pd.Series(smb_values, index=index_vals)
+        hml_series = pd.Series(hml_values, index=index_vals)
+
+        return smb_series, hml_series
 
     def _calculate_momentum_factor(self, returns_df: pd.DataFrame, lookback_period: int = 60) -> pd.Series:
         """Momentum factor (WML) with shorter lookback for robustness."""

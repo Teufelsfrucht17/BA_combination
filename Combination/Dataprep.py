@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Optional, List
 from ConfigManager import ConfigManager
+from logger_config import get_logger
 
 DEFAULT_MIN_TRAIN_SIZE = 50
 DEFAULT_MIN_TEST_SIZE = 10
@@ -25,6 +26,8 @@ AVAILABLE_FEATURES = {
     'rsi_14',
     'Mkt_Rf', 'SMB', 'HML', 'WML'
 }
+
+logger = get_logger(__name__)
 
 
 class DataPrep:
@@ -192,9 +195,6 @@ class DataPrep:
         if ff_factors is not None and not ff_factors.empty:
             if isinstance(features.index, pd.DatetimeIndex) and isinstance(ff_factors.index, pd.DatetimeIndex):
                 if period_type == "intraday" or features.index.hour.nunique() > 1:
-                    features_date = features.index.normalize()
-                    ff_factors_date = ff_factors.index.normalize()
-                    
                     ff_dict = {}
                     for date, row in ff_factors.iterrows():
                         date_only = pd.Timestamp(date).normalize()
@@ -212,6 +212,10 @@ class DataPrep:
                     for col in ['Mkt_Rf', 'SMB', 'HML', 'WML']:
                         if col in ff_factors.columns:
                             features[col] = ff_factors[col]
+
+            ff_cols_present = [c for c in ['Mkt_Rf', 'SMB', 'HML', 'WML'] if c in features.columns]
+            if ff_cols_present:
+                logger.info("FFC-Faktoren in Features aufgenommen: %s", ff_cols_present)
         features['price_direction_next'] = (features['price_change_next'] > 0).astype(int)
 
         return features
@@ -262,6 +266,17 @@ class DataPrep:
 
         if len(available_features) == 0:
             available_features = list(features_df.columns)
+
+        ffc_feature_names = ['Mkt_Rf', 'SMB', 'HML', 'WML']
+        ff_cols_in_df = [f for f in ffc_feature_names if f in features_df.columns]
+        added_ff_cols: List[str] = []
+        for col in ff_cols_in_df:
+            if col not in available_features:
+                available_features.append(col)
+                added_ff_cols.append(col)
+
+        if added_ff_cols:
+            logger.info("FFC-Faktoren in X einbezogen: %s", added_ff_cols)
 
         X = features_df[available_features].copy()
         y = features_df[target].copy()
