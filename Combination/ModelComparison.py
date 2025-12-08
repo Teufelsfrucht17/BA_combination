@@ -16,6 +16,7 @@ from ConfigManager import ConfigManager
 from FamaFrench import FamaFrenchFactorModel, calculate_fama_french_factors
 from Models_Wrapper import (
     train_pytorch_model,
+    tune_pytorch_model_optuna,
     train_ols,
     train_ridge,
     train_random_forest,
@@ -184,20 +185,38 @@ class ModelComparison:
         portfolio_config = self.config.get(f"data.portfolios.{portfolio_name}")
         portfolio_display = portfolio_config.get("name", portfolio_name.upper())
 
+        use_optuna_for_nn = self.config.get("models.pytorch_nn.optuna.enabled", False)
 
-        model_configs = {
-            "naive_baseline": {
-                "enabled": True,
-                "train_func": train_naive_baseline,
-                "display_name": "Baseline Model (Naive Predictor)",
-                "get_kwargs": lambda: {},
-                "extra_info": "Baseline used as a benchmark (should be outperformed by ML models)"
-            },
-            "pytorch_nn": {
-                "enabled": self.config.get("models.pytorch_nn.enabled", False),
-                "train_func": train_pytorch_model,
-                "display_name": "PyTorch Neural Network",
-                "get_kwargs": lambda: {
+        if use_optuna_for_nn:
+            pytorch_train_func = tune_pytorch_model_optuna
+
+            def _pytorch_get_kwargs():
+                base_params = {
+                    "hidden1": self.config.get("models.pytorch_nn.hidden1", 64),
+                    "hidden2": self.config.get("models.pytorch_nn.hidden2", 32),
+                    "epochs": self.config.get("models.pytorch_nn.epochs", 200),
+                    "batch_size": self.config.get("models.pytorch_nn.batch_size", 64),
+                    "lr": self.config.get("models.pytorch_nn.learning_rate", 0.001),
+                    "validation_split": self.config.get("models.pytorch_nn.validation_split", 0.2),
+                    "early_stopping_patience": self.config.get("models.pytorch_nn.early_stopping_patience", 20),
+                    "use_scheduler": True,
+                    "scheduler_patience": self.config.get("models.pytorch_nn.scheduler_patience", 10),
+                    "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
+                }
+                param_grid = self.config.get("models.pytorch_nn.optuna.param_grid", {})
+                n_trials = self.config.get("models.pytorch_nn.optuna.n_trials", None)
+                return {
+                    "base_params": base_params,
+                    "param_grid": param_grid,
+                    "n_trials": n_trials,
+                    "portfolio_name": portfolio_name,
+                    "period_type": period_type
+                }
+        else:
+            pytorch_train_func = train_pytorch_model
+
+            def _pytorch_get_kwargs():
+                return {
                     "hidden1": self.config.get("models.pytorch_nn.hidden1", 64),
                     "hidden2": self.config.get("models.pytorch_nn.hidden2", 32),
                     "epochs": self.config.get("models.pytorch_nn.epochs", 200),
@@ -211,6 +230,20 @@ class ModelComparison:
                     "portfolio_name": portfolio_name,
                     "period_type": period_type
                 }
+
+        model_configs = {
+            "naive_baseline": {
+                "enabled": True,
+                "train_func": train_naive_baseline,
+                "display_name": "Baseline Model (Naive Predictor)",
+                "get_kwargs": lambda: {},
+                "extra_info": "Baseline used as a benchmark (should be outperformed by ML models)"
+            },
+            "pytorch_nn": {
+                "enabled": self.config.get("models.pytorch_nn.enabled", False),
+                "train_func": pytorch_train_func,
+                "display_name": "PyTorch Neural Network",
+                "get_kwargs": _pytorch_get_kwargs
             },
             "ols": {
                 "enabled": self.config.get("models.ols.enabled", False),

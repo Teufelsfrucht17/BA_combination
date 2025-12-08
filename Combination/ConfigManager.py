@@ -46,7 +46,18 @@ DEFAULT_CONFIG = {
             "validation_split": 0.2,
             "weight_decay": 0.0005,
             "early_stopping_patience": 40,
-            "scheduler_patience": 15
+            "scheduler_patience": 15,
+            "optuna": {
+                "enabled": False,
+                "n_trials": None,
+                "param_grid": {
+                    "hidden1": [64, 128],
+                    "hidden2": [32, 64],
+                    "batch_size": [32, 64],
+                    "lr": [0.001, 0.0005],
+                    "weight_decay": [0.0, 0.0005]
+                }
+            }
         },
         "ols": {
             "enabled": True

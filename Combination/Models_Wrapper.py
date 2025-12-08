@@ -9,6 +9,7 @@ import time
 import copy
 from pathlib import Path
 from typing import Tuple, Dict, Any, Optional, Union, List
+import optuna
 
 from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.ensemble import RandomForestRegressor
@@ -244,6 +245,124 @@ def train_pytorch_model(
     return model, metrics
 
 
+
+
+def tune_pytorch_model_optuna(
+    X_train: Union[pd.DataFrame, np.ndarray],
+    y_train: Union[pd.Series, np.ndarray],
+    X_test: Union[pd.DataFrame, np.ndarray],
+    y_test: Union[pd.Series, np.ndarray],
+    base_params: Optional[Dict[str, Any]] = None,
+    param_grid: Optional[Dict[str, List[Any]]] = None,
+    n_trials: Optional[int] = None,
+    portfolio_name: Optional[str] = None,
+    period_type: Optional[str] = None
+) -> Tuple[nn.Module, Dict[str, Any]]:
+    """
+    Hyperparameter tuning for the PyTorch model using Optuna with a grid-search style sampler.
+
+    This function runs multiple trials of ``train_pytorch_model`` with different hyperparameters
+    and returns the best model according to the validation loss.
+
+    Args:
+        X_train, y_train, X_test, y_test: Train/test data (already scaled).
+        base_params: Fixed parameters forwarded to ``train_pytorch_model`` for all trials
+                     (e.g. epochs, validation_split, scheduler settings).
+        param_grid: Dictionary of hyperparameters to search over. Keys must match
+                    arguments of ``train_pytorch_model`` (e.g. "hidden1", "hidden2",
+                    "batch_size", "lr", "weight_decay").
+        n_trials: Optional maximum number of trials. If None, all grid combinations are used.
+        portfolio_name: Optional portfolio name for the final (best) model logging.
+        period_type: Optional period type for the final (best) model logging.
+
+    Returns:
+        best_model: Trained PyTorch model using the best hyperparameters.
+        metrics: Metrics of the best model on the test set, extended with Optuna information.
+    """
+    try:
+        from optuna.samplers import GridSampler
+    except ImportError as exc:
+        raise ImportError(
+            "Optuna is required for PyTorch hyperparameter tuning. "
+            "Install it with 'pip install optuna'."
+        ) from exc
+
+    if base_params is None:
+        base_params = {}
+
+    if param_grid is None or len(param_grid) == 0:
+        param_grid = {
+            "hidden1": [64, 128],
+            "hidden2": [32, 64],
+            "batch_size": [32, 64],
+            "lr": [1e-3, 5e-4],
+            "weight_decay": [0.0, 5e-4],
+        }
+
+    # Ensure all grid values are lists (as expected by GridSampler)
+    search_space: Dict[str, List[Any]] = {}
+    for key, values in param_grid.items():
+        if isinstance(values, (list, tuple)):
+            search_space[key] = list(values)
+        else:
+            search_space[key] = [values]
+
+    def _grid_size(space: Dict[str, List[Any]]) -> int:
+        size = 1
+        for values in space.values():
+            size *= max(len(values), 1)
+        return size
+
+    max_grid_size = _grid_size(search_space)
+    if n_trials is None or n_trials > max_grid_size:
+        n_trials = max_grid_size
+
+    sampler = GridSampler(search_space)
+    study = optuna.create_study(direction="minimize", sampler=sampler)
+
+    def objective(trial: "optuna.Trial") -> float:
+        trial_params = base_params.copy()
+        for key in search_space.keys():
+            trial_params[key] = trial.suggest_categorical(key, search_space[key])
+
+        # Do not write training curves for each trial to avoid many files
+        trial_params_for_training = trial_params.copy()
+        trial_params_for_training["portfolio_name"] = None
+        trial_params_for_training["period_type"] = None
+
+        _, metrics = train_pytorch_model(
+            X_train,
+            y_train,
+            X_test,
+            y_test,
+            **trial_params_for_training
+        )
+        return float(metrics.get("best_val_loss", np.inf))
+
+    study.optimize(objective, n_trials=n_trials)
+
+    best_params = base_params.copy()
+    best_params.update(study.best_params)
+
+    # Train final model once more with best hyperparameters and proper logging identifiers
+    final_params = best_params.copy()
+    final_params["portfolio_name"] = portfolio_name
+    final_params["period_type"] = period_type
+
+    best_model, best_metrics = train_pytorch_model(
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        **final_params
+    )
+
+    best_metrics = dict(best_metrics)
+    best_metrics["optuna_best_params"] = study.best_params
+    best_metrics["optuna_best_val_loss"] = study.best_value
+    best_metrics["optuna_n_trials"] = n_trials
+
+    return best_model, best_metrics
 
 
 def train_ols(
