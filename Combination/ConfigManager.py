@@ -47,6 +47,7 @@ DEFAULT_CONFIG = {
             "weight_decay": 0.0005,
             "early_stopping_patience": 40,
             "scheduler_patience": 15,
+            "visualize_model": False,
             "optuna": {
                 "enabled": False,
                 "n_trials": None,

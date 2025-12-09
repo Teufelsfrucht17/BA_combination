@@ -210,7 +210,8 @@ class ModelComparison:
                     "param_grid": param_grid,
                     "n_trials": n_trials,
                     "portfolio_name": portfolio_name,
-                    "period_type": period_type
+                    "period_type": period_type,
+                    "visualize_model": self.config.get("models.pytorch_nn.visualize_model", False)
                 }
         else:
             pytorch_train_func = train_pytorch_model
@@ -228,7 +229,8 @@ class ModelComparison:
                     "scheduler_patience": self.config.get("models.pytorch_nn.scheduler_patience", 10),
                     "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
                     "portfolio_name": portfolio_name,
-                    "period_type": period_type
+                    "period_type": period_type,
+                    "visualize_model": self.config.get("models.pytorch_nn.visualize_model", False)
                 }
 
         model_configs = {

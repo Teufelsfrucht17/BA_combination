@@ -77,7 +77,8 @@ def train_pytorch_model(
     weight_decay: float = 0.0,
     standardize_target: bool = True,
     portfolio_name: Optional[str] = None,
-    period_type: Optional[str] = None
+    period_type: Optional[str] = None,
+    visualize_model: bool = False
 ) -> Tuple[nn.Module, Dict[str, Any]]:
     """
     Train a PyTorch MLP with two hidden layers, dropout, early stopping, and an optional LR scheduler.
@@ -143,6 +144,77 @@ def train_pytorch_model(
 
     n_features = X_train_t.shape[1]
     model = SimpleNet(in_features=n_features, hidden1=hidden1, hidden2=hidden2, out_features=1).to(device)
+
+    if visualize_model:
+        try:
+            from torchviz import make_dot
+            from graphviz import Digraph
+
+            model.eval()
+            example_input = X_train_inner[:1].to(device)
+            example_input.requires_grad_(True)
+            example_output = model(example_input)
+
+            # Detailierter Rechengraph
+            dot = make_dot(
+                example_output,
+                params=dict(model.named_parameters()),
+                show_attrs=False,
+                show_saved=False,
+            )
+            dot.graph_attr.update({
+                "rankdir": "LR",
+                "dpi": "120",
+            })
+            dot.node_attr.update({
+                "shape": "record",
+                "fontname": "Helvetica",
+                "fontsize": "10",
+                "style": "filled",
+                "fillcolor": "lightgray",
+            })
+            dot.edge_attr.update({
+                "fontname": "Helvetica",
+                "fontsize": "8",
+            })
+
+            viz_dir = Path("Models")
+            viz_dir.mkdir(exist_ok=True)
+            name_suffix = ""
+            if portfolio_name:
+                name_suffix += f"_{portfolio_name}"
+            if period_type:
+                name_suffix += f"_{period_type}"
+
+            dot.render(str(viz_dir / f"pytorch_model{name_suffix}"), format="png")
+
+            # Vereinfachte Architektur-Ansicht mit Layern
+            try:
+                arch = Digraph("SimpleNet", format="png")
+                arch.attr(rankdir="LR", dpi="120")
+                arch.attr("node", shape="record", fontname="Helvetica", fontsize="10", style="filled", fillcolor="lightblue")
+                arch.attr("edge", fontname="Helvetica", fontsize="9")
+
+                arch.node("input", f"Input|neurons={n_features}")
+                arch.node(
+                    "hidden1",
+                    f"Hidden1|neurons={hidden1}|Linear({n_features},{hidden1})|ReLU|Dropout(p=0.2)",
+                )
+                arch.node(
+                    "hidden2",
+                    f"Hidden2|neurons={hidden2}|Linear({hidden1},{hidden2})|ReLU|Dropout(p=0.2)",
+                )
+                arch.node("output", f"Output|neurons=1|Linear({hidden2},1)")
+
+                arch.edge("input", "hidden1")
+                arch.edge("hidden1", "hidden2")
+                arch.edge("hidden2", "output")
+
+                arch.render(str(viz_dir / f"pytorch_model_layers{name_suffix}"), format="png")
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.MSELoss()
@@ -256,7 +328,8 @@ def tune_pytorch_model_optuna(
     param_grid: Optional[Dict[str, List[Any]]] = None,
     n_trials: Optional[int] = None,
     portfolio_name: Optional[str] = None,
-    period_type: Optional[str] = None
+    period_type: Optional[str] = None,
+    visualize_model: bool = False
 ) -> Tuple[nn.Module, Dict[str, Any]]:
     """
     Hyperparameter tuning for the PyTorch model using Optuna with a grid-search style sampler.
@@ -348,6 +421,7 @@ def tune_pytorch_model_optuna(
     final_params = best_params.copy()
     final_params["portfolio_name"] = portfolio_name
     final_params["period_type"] = period_type
+    final_params["visualize_model"] = visualize_model
 
     best_model, best_metrics = train_pytorch_model(
         X_train,

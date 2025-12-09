@@ -69,6 +69,7 @@ models:
     weight_decay: 0.0005
     early_stopping_patience: 40
     scheduler_patience: 15
+    visualize_model: true
     optuna:
       enabled: true
       n_trials:
