@@ -218,7 +218,61 @@ class DataPrep:
                 logger.info("FFC-Faktoren in Features aufgenommen: %s", ff_cols_present)
         features['price_direction_next'] = (features['price_change_next'] > 0).astype(int)
 
+        # Einfache IQR-Outlier-Behandlung auf allen numerischen Spalten
+        features = self.apply_iqr_filter(features)
+
         return features
+
+    def apply_iqr_filter(self, df: pd.DataFrame, factor: float = 1.5) -> pd.DataFrame:
+        """
+        Entfernt Ausreißer anhand der IQR-Methode.
+
+        Für jede numerische Spalte wird der Bereich
+        [Q1 - factor * IQR, Q3 + factor * IQR]
+        bestimmt. Zeilen mit Werten außerhalb dieses Bereichs
+        werden entfernt.
+
+        Args:
+            df: Eingabe-DataFrame
+            factor: Multiplikator für die IQR-Spanne (Standard: 1.5)
+
+        Returns:
+            Gefiltertes DataFrame ohne starke Ausreißer
+        """
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) == 0:
+            return df
+
+        mask = pd.Series(True, index=df.index)
+
+        for col in numeric_cols:
+            series = df[col].dropna()
+            if series.empty:
+                continue
+
+            q1 = series.quantile(0.25)
+            q3 = series.quantile(0.75)
+            iqr = q3 - q1
+
+            if iqr == 0 or pd.isna(iqr):
+                continue
+
+            lower = q1 - factor * iqr
+            upper = q3 + factor * iqr
+
+            col_mask = df[col].between(lower, upper) | df[col].isna()
+            mask &= col_mask
+
+        filtered = df[mask]
+
+        if len(filtered) != len(df):
+            logger.info(
+                "IQR-Filter angewendet: %d von %d Zeilen entfernt",
+                len(df) - len(filtered),
+                len(df),
+            )
+
+        return filtered
 
     def calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """
