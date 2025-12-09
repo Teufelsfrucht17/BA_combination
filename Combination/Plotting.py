@@ -1,9 +1,11 @@
 """
-Plotting helpers for inspecting raw and prepared data.
+Plotting helpers for portfolio price and structure inspection.
 
-Creates a line plot and a boxplot for each numeric DataFrame provided.
-Includes loaders for plotting price developments directly from the Excel
-files stored in DataStorage.
+Currently supports:
+  - Line plots of all stocks in a DAX/SDAX portfolio (excluding the index)
+  - Line plots of the corresponding DAX/SDAX indices
+  - Overview plots describing the structure of a portfolio (prices, returns,
+    dispersion, and correlation) based on DataStorage Excel files.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple, Union, List, Optional
+from typing import Any, Dict, Tuple, Union, List, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_PLOTS_DIR = BASE_DIR / "Results" / "plots"
@@ -19,21 +21,16 @@ DEFAULT_STORAGE_DIR = BASE_DIR / "DataStorage"
 os.environ.setdefault("MPLCONFIGDIR", str(BASE_DIR / ".matplotlib_cache"))
 Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
 
+import numpy as np
 import pandas as pd
 
 import matplotlib
+from ConfigManager import ConfigManager
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-DataContainer = Union[pd.DataFrame, Dict[str, Any]]
 PREFERRED_PRICE_FIELDS: List[str] = ["TRDPRC_1", "OPEN_PRC", "CLOSE_PRC"]
-OPEN_CLOSE_FIELDS: List[str] = ["OPEN_PRC", "CLOSE_PRC"]
-
-
-def _sanitize(name: str) -> str:
-    """Create a filesystem-friendly name."""
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name) or "plot"
 
 
 def _parse_column_label(label: Any) -> Tuple[str, Optional[str]]:
@@ -54,63 +51,6 @@ def _parse_column_label(label: Any) -> Tuple[str, Optional[str]]:
 
     clean = text.strip(" _")
     return clean, None
-
-
-def _flatten_data(data: DataContainer, prefix: str) -> Iterable[Tuple[str, pd.DataFrame]]:
-    """
-    Yield (name, DataFrame) pairs from nested dicts or a single DataFrame.
-
-    Args:
-        data: DataFrame or (nested) dictionary of DataFrames.
-        prefix: Name prefix used to build plot labels.
-    """
-    if isinstance(data, dict):
-        for key, value in data.items():
-            child_prefix = f"{prefix}_{key}" if prefix else str(key)
-            yield from _flatten_data(value, child_prefix)
-    elif isinstance(data, pd.DataFrame):
-        yield prefix, data
-    else:
-        return
-
-
-def _plot_single_dataframe(df: pd.DataFrame, plot_name: str, output_dir: Path) -> None:
-    """Create line plot and boxplot for a single DataFrame."""
-    if matplotlib is None or plt is None:
-        return
-
-    numeric_df = df.select_dtypes(include=["number"]).copy()
-    numeric_df = numeric_df.dropna(how="all")
-
-    if numeric_df.empty:
-        return
-
-    numeric_df.sort_index(inplace=True)
-
-    safe_name = _sanitize(plot_name)
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    numeric_df.plot(ax=ax, linewidth=1)
-    ax.set_title(f"{plot_name} - Line plot")
-    ax.set_xlabel("Date" if isinstance(numeric_df.index, pd.DatetimeIndex) else "Index")
-    ax.set_ylabel("Value")
-    if len(numeric_df.columns) > 10:
-        ax.legend().remove()
-    else:
-        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
-    fig.tight_layout()
-    line_path = output_dir / f"{safe_name}_line.png"
-    fig.savefig(line_path)
-    plt.close(fig)
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    numeric_df.plot(kind="box", ax=ax, rot=45)
-    ax.set_title(f"{plot_name} - Boxplot")
-    ax.set_ylabel("Value distribution")
-    fig.tight_layout()
-    box_path = output_dir / f"{safe_name}_box.png"
-    fig.savefig(box_path)
-    plt.close(fig)
 
 
 def _load_prices_from_excel(
@@ -177,62 +117,278 @@ def _load_prices_from_excel(
     return combined
 
 
-def plot_datastorage_price_development(
-    output_dir: Union[str, Path] = DEFAULT_PLOTS_DIR / "datastorage_prices",
-    preferred_fields: Optional[List[str]] = None,
-    include_intraday: bool = False,
-) -> None:
+def _build_portfolio_price_series(
+    portfolio_name: str,
+    period_type: str = "daily",
+    config_path: Union[str, Path] = BASE_DIR / "config.yaml",
+    exclude_symbols: Optional[List[str]] = None,
+) -> pd.DataFrame:
     """
-    Plot price development of DAX and SDAX companies from stored Excel files.
+    Build a price DataFrame for all stocks in a given portfolio.
 
-    Reads `dax_daily.xlsx` and `sdax_daily.xlsx` from DataStorage, combines the
-    preferred price fields per instrument, and saves line/box plots. Set
-    `include_intraday=True` to also plot 30-minute data.
+    The returned DataFrame contains one column per stock in the configured
+    universe (e.g. all DAX or all SDAX stocks we consider), using the best
+    available price field per instrument. The index level itself is not
+    included, since it is not part of the universe.
     """
-    storage_dir = DEFAULT_STORAGE_DIR
-    datasets = {
-        "dax_daily_prices": storage_dir / "dax_daily.xlsx",
-        "sdax_daily_prices": storage_dir / "sdax_daily.xlsx",
-    }
-    if include_intraday:
-        datasets["dax_intraday_prices"] = storage_dir / "dax_intraday.xlsx"
-        datasets["sdax_intraday_prices"] = storage_dir / "sdax_intraday.xlsx"
+    config = ConfigManager(str(config_path))
+    universe = config.get(f"data.portfolios.{portfolio_name}.universe", [])
+    if not universe:
+        return pd.DataFrame()
 
-    preferred_main = preferred_fields or OPEN_CLOSE_FIELDS
-    for name, path in datasets.items():
-        df_main = _load_prices_from_excel(
-            path,
-            preferred_fields=preferred_main,
-            exclude_fields=["TRDPRC_1"],
-        )
-        if df_main.empty:
-            continue
-        else:
-            plot_data_overview(df_main, dataset_name=f"{name}_no_trdprc1", output_dir=output_dir)
+    excel_path = DEFAULT_STORAGE_DIR / f"{portfolio_name}_{period_type}.xlsx"
+    prices_df = _load_prices_from_excel(excel_path)
+    if prices_df.empty:
+        return pd.DataFrame()
 
-        df_trd = _load_prices_from_excel(path, preferred_fields=["TRDPRC_1"])
-        if df_trd.empty:
-            continue
-        else:
-            trd_dir = Path(output_dir) / "trdprc1_only"
-            plot_data_overview(df_trd, dataset_name=f"{name}_trdprc1", output_dir=trd_dir)
+    instruments = [inst for inst in universe if inst in prices_df.columns]
+    if exclude_symbols:
+        exclude_set = set(exclude_symbols)
+        instruments = [inst for inst in instruments if inst not in exclude_set]
+    if not instruments:
+        return pd.DataFrame()
+
+    return prices_df[instruments]
 
 
-def plot_data_overview(
-    data: DataContainer,
-    dataset_name: str,
-    output_dir: Union[str, Path] = DEFAULT_PLOTS_DIR,
-) -> None:
+def _build_index_price_series(
+    portfolio_name: str,
+    period_type: str = "daily",
+    config_path: Union[str, Path] = BASE_DIR / "config.yaml",
+) -> pd.Series:
     """
-    Plot numeric columns of raw or prepared data as line plot and boxplot.
+    Build the price series for the index associated with a given portfolio.
 
-    Args:
-        data: DataFrame or nested dictionaries containing DataFrames.
-        dataset_name: Name prefix used in plot titles and file names.
-        output_dir: Directory where plots are written.
+    Example:
+        - portfolio_name=\"dax\"  -> index \".GDAXI\"
+        - portfolio_name=\"sdax\" -> index \".SDAXI\"
     """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    config = ConfigManager(str(config_path))
+    index_symbol = config.get(f"data.portfolios.{portfolio_name}.index")
+    if not index_symbol:
+        return pd.Series(dtype=float)
 
-    for plot_name, df in _flatten_data(data, dataset_name):
-        _plot_single_dataframe(df, plot_name, output_path)
+    excel_path = DEFAULT_STORAGE_DIR / f"{portfolio_name}_{period_type}.xlsx"
+    prices_df = _load_prices_from_excel(excel_path, preferred_fields=["TRDPRC_1"])
+    if prices_df.empty:
+        return pd.Series(dtype=float)
+
+    candidate_cols = [c for c in prices_df.columns if index_symbol in str(c)]
+    if not candidate_cols:
+        return pd.Series(dtype=float)
+
+    series = prices_df[candidate_cols[0]].copy()
+    series.name = index_symbol
+    return series
+
+
+def plot_portfolio_price_line(
+    portfolio_name: str,
+    period_type: str = "daily",
+    output_dir: Union[str, Path] = DEFAULT_PLOTS_DIR / "portfolio_line",
+    exclude_symbols: Optional[List[str]] = None,
+) -> Optional[Path]:
+    """
+    Create a line plot for all portfolio stocks' price series.
+
+    Example:
+        - plot_portfolio_price_line("dax")                         # all DAX stocks
+        - plot_portfolio_price_line("sdax")                        # all SDAX stocks
+        - plot_portfolio_price_line("dax", exclude_symbols=["RHMG.DE"])  # DAX excl. Rheinmetall
+    """
+    prices_df = _build_portfolio_price_series(
+        portfolio_name,
+        period_type=period_type,
+        exclude_symbols=exclude_symbols,
+    )
+    if prices_df.empty:
+        return None
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(12.0, 5.0))
+    prices_df.plot(ax=ax, linewidth=1)
+    ax.set_title(f"{portfolio_name.upper()} portfolio stocks - prices ({period_type})")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price")
+    if len(prices_df.columns) > 10:
+        ax.legend().remove()
+    else:
+        ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
+    fig.tight_layout()
+
+    suffix = ""
+    if exclude_symbols:
+        cleaned = "_".join(sym.replace(".", "") for sym in sorted(exclude_symbols))
+        suffix = f"_excl_{cleaned}"
+
+    out_file = out_dir / f"{portfolio_name}_{period_type}_portfolio_line{suffix}.png"
+    fig.savefig(out_file)
+    plt.close(fig)
+    return out_file
+
+
+def plot_index_price_line(
+    portfolio_name: str,
+    period_type: str = "daily",
+    output_dir: Union[str, Path] = DEFAULT_PLOTS_DIR / "index_line",
+) -> Optional[Path]:
+    """
+    Create a line plot for the index price associated with a portfolio.
+
+    Example:
+        - plot_index_price_line("dax")   # DAX index (.GDAXI)
+        - plot_index_price_line("sdax")  # SDAX index (.SDAXI)
+    """
+    series = _build_index_price_series(portfolio_name, period_type=period_type)
+    if series.empty:
+        return None
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(series.index, series.values, label=series.name)
+    ax.set_title(f"{series.name} index price ({period_type})")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Price")
+    ax.legend(loc="upper left", frameon=False)
+    fig.tight_layout()
+
+    out_file = out_dir / f"{portfolio_name}_{period_type}_index_line.png"
+    fig.savefig(out_file)
+    plt.close(fig)
+    return out_file
+
+
+def plot_portfolio_structure_overview(
+    portfolio_name: str,
+    period_type: str = "daily",
+    output_dir: Union[str, Path] = DEFAULT_PLOTS_DIR / "portfolio_structure",
+) -> Optional[Path]:
+    """
+    Create an overview figure that helps describe the data structure
+    of a portfolio:
+
+      - Equal-weight portfolio price over time
+      - Histogram of equal-weight log returns
+      - Boxplot of per-stock log returns
+      - Correlation heatmap of per-stock log returns
+    """
+    prices_df = _build_portfolio_price_series(portfolio_name, period_type=period_type)
+    if prices_df.empty:
+        return None
+
+    returns_df = np.log(prices_df / prices_df.shift(1)).dropna(how="all")
+    if returns_df.empty:
+        return None
+
+    ew_price = prices_df.mean(axis=1)
+    ew_returns = np.log(ew_price / ew_price.shift(1)).dropna()
+
+    corr = returns_df.corr()
+
+    base_dir = Path(output_dir)
+    out_dir = base_dir / period_type
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14.0, 8.0))
+
+    # Top-left: equal-weight portfolio price
+    ax_price = axes[0, 0]
+    ax_price.plot(ew_price.index, ew_price.values)
+    ax_price.set_title(f"{portfolio_name.upper()} portfolio (equal-weight price, {period_type})")
+    ax_price.set_xlabel("Date")
+    ax_price.set_ylabel("Price")
+
+    # Top-right: histogram of equal-weight log returns
+    ax_hist = axes[0, 1]
+    ax_hist.hist(ew_returns.values, bins=30, edgecolor="black")
+    ax_hist.set_title(f"{portfolio_name.upper()} portfolio log returns (histogram)")
+    ax_hist.set_xlabel("Log return")
+    ax_hist.set_ylabel("Frequency")
+
+    # Bottom-left: boxplot of per-stock log returns
+    ax_box = axes[1, 0]
+    ax_box.boxplot(
+        [returns_df[col].dropna().values for col in returns_df.columns],
+        labels=returns_df.columns,
+        vert=True,
+        patch_artist=True,
+    )
+    ax_box.set_title("Per-stock log return dispersion")
+    ax_box.set_ylabel("Log return")
+    ax_box.tick_params(axis="x", rotation=45)
+
+    # Bottom-right: correlation heatmap of per-stock log returns
+    ax_heat = axes[1, 1]
+    im = ax_heat.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
+    ax_heat.set_title("Correlation of per-stock log returns")
+    ax_heat.set_xticks(range(len(corr.columns)))
+    ax_heat.set_xticklabels(corr.columns, rotation=45, ha="right")
+    ax_heat.set_yticks(range(len(corr.index)))
+    ax_heat.set_yticklabels(corr.index)
+    fig.colorbar(im, ax=ax_heat, fraction=0.046, pad=0.04)
+
+    fig.tight_layout()
+
+    overview_file = out_dir / f"{portfolio_name}_{period_type}_structure_overview.png"
+    fig.savefig(overview_file)
+    plt.close(fig)
+
+    # Additionally: save each component as its own figure
+
+    # 1) Equal-weight portfolio price
+    fig_p, ax_p = plt.subplots(figsize=(8.0, 4.0))
+    ax_p.plot(ew_price.index, ew_price.values)
+    ax_p.set_title(f"{portfolio_name.upper()} portfolio (equal-weight price, {period_type})")
+    ax_p.set_xlabel("Date")
+    ax_p.set_ylabel("Price")
+    fig_p.tight_layout()
+    price_file = out_dir / f"{portfolio_name}_{period_type}_structure_price.png"
+    fig_p.savefig(price_file)
+    plt.close(fig_p)
+
+    # 2) Histogram of equal-weight log returns
+    fig_h, ax_h = plt.subplots(figsize=(6.0, 4.0))
+    ax_h.hist(ew_returns.values, bins=30, edgecolor="black")
+    ax_h.set_title(f"{portfolio_name.upper()} portfolio log returns (histogram)")
+    ax_h.set_xlabel("Log return")
+    ax_h.set_ylabel("Frequency")
+    fig_h.tight_layout()
+    hist_file = out_dir / f"{portfolio_name}_{period_type}_structure_ew_returns_hist.png"
+    fig_h.savefig(hist_file)
+    plt.close(fig_h)
+
+    # 3) Boxplot of per-stock log returns
+    fig_b, ax_b = plt.subplots(figsize=(10.0, 4.0))
+    ax_b.boxplot(
+        [returns_df[col].dropna().values for col in returns_df.columns],
+        labels=returns_df.columns,
+        vert=True,
+        patch_artist=True,
+    )
+    ax_b.set_title("Per-stock log return dispersion")
+    ax_b.set_ylabel("Log return")
+    ax_b.tick_params(axis="x", rotation=45)
+    fig_b.tight_layout()
+    box_file = out_dir / f"{portfolio_name}_{period_type}_structure_stock_returns_box.png"
+    fig_b.savefig(box_file)
+    plt.close(fig_b)
+
+    # 4) Correlation heatmap of per-stock log returns
+    fig_c, ax_c = plt.subplots(figsize=(8.0, 6.0))
+    im2 = ax_c.imshow(corr.values, cmap="coolwarm", vmin=-1, vmax=1)
+    ax_c.set_title("Correlation of per-stock log returns")
+    ax_c.set_xticks(range(len(corr.columns)))
+    ax_c.set_xticklabels(corr.columns, rotation=45, ha="right")
+    ax_c.set_yticks(range(len(corr.index)))
+    ax_c.set_yticklabels(corr.index)
+    fig_c.colorbar(im2, ax=ax_c, fraction=0.046, pad=0.04)
+    fig_c.tight_layout()
+    corr_file = out_dir / f"{portfolio_name}_{period_type}_structure_corr_heatmap.png"
+    fig_c.savefig(corr_file)
+    plt.close(fig_c)
+
+    return overview_file
