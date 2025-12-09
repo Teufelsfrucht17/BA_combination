@@ -17,6 +17,7 @@ from typing import Any, Dict, Tuple, Union, List, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_PLOTS_DIR = BASE_DIR / "Results" / "plots"
+DEFAULT_CLEANED_PLOTS_DIR = DEFAULT_PLOTS_DIR / "cleaned"
 DEFAULT_STORAGE_DIR = BASE_DIR / "DataStorage"
 os.environ.setdefault("MPLCONFIGDIR", str(BASE_DIR / ".matplotlib_cache"))
 Path(os.environ["MPLCONFIGDIR"]).mkdir(parents=True, exist_ok=True)
@@ -26,6 +27,7 @@ import pandas as pd
 
 import matplotlib
 from ConfigManager import ConfigManager
+from Dataprep import DataPrep
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -148,7 +150,45 @@ def _build_portfolio_price_series(
     if not instruments:
         return pd.DataFrame()
 
-    return prices_df[instruments]
+    return prices_df[instruments].copy()
+
+
+def _build_cleaned_portfolio_price_series(
+    portfolio_name: str,
+    period_type: str = "daily",
+    config_path: Union[str, Path] = BASE_DIR / "config.yaml",
+    exclude_symbols: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """
+    Build a cleaned price DataFrame for all stocks in a given portfolio.
+
+    Uses the same raw price construction as `_build_portfolio_price_series`,
+    then applies the IQR-based outlier filter from DataPrep to the per-stock
+    log returns and keeps only the non-outlier rows.
+    """
+    raw = _build_portfolio_price_series(
+        portfolio_name=portfolio_name,
+        period_type=period_type,
+        config_path=config_path,
+        exclude_symbols=exclude_symbols,
+    )
+    if raw.empty:
+        return raw
+
+    # Compute per-stock log returns
+    returns = np.log(raw / raw.shift(1))
+    returns = returns.replace([np.inf, -np.inf], np.nan).dropna(how="all")
+    if returns.empty:
+        return pd.DataFrame()
+
+    prep = DataPrep(str(config_path))
+    cleaned_returns = prep.apply_iqr_filter(returns)
+    if cleaned_returns.empty:
+        return pd.DataFrame()
+
+    cleaned_index = cleaned_returns.index
+    cleaned_prices = raw.loc[cleaned_index]
+    return cleaned_prices
 
 
 def _build_index_price_series(
@@ -180,6 +220,41 @@ def _build_index_price_series(
     series = prices_df[candidate_cols[0]].copy()
     series.name = index_symbol
     return series
+
+
+def _build_cleaned_index_price_series(
+    portfolio_name: str,
+    period_type: str = "daily",
+    config_path: Union[str, Path] = BASE_DIR / "config.yaml",
+) -> pd.Series:
+    """
+    Build a cleaned index price series for a given portfolio.
+
+    Applies the same IQR-based outlier filter (from DataPrep) to the log
+    returns of the index and keeps only non-outlier rows.
+    """
+    series = _build_index_price_series(
+        portfolio_name=portfolio_name,
+        period_type=period_type,
+        config_path=config_path,
+    )
+    if series.empty:
+        return series
+
+    returns = np.log(series / series.shift(1))
+    returns = returns.replace([np.inf, -np.inf], np.nan).dropna()
+    if returns.empty:
+        return pd.Series(dtype=float)
+
+    prep = DataPrep(str(config_path))
+    cleaned_returns = prep.apply_iqr_filter(returns.to_frame("idx"))["idx"]
+    if cleaned_returns.empty:
+        return pd.Series(dtype=float)
+
+    cleaned_index = cleaned_returns.index
+    cleaned_series = series.loc[cleaned_index]
+    cleaned_series.name = series.name
+    return cleaned_series
 
 
 def plot_portfolio_price_line(
@@ -226,6 +301,34 @@ def plot_portfolio_price_line(
     out_file = out_dir / f"{portfolio_name}_{period_type}_portfolio_line{suffix}.png"
     fig.savefig(out_file)
     plt.close(fig)
+
+    # Also create a cleaned version (based on IQR filter) and save it
+    # in a mirrored folder structure under Results/plots/cleaned.
+    cleaned_dir = DEFAULT_CLEANED_PLOTS_DIR / "portfolio_line"
+    cleaned_dir.mkdir(parents=True, exist_ok=True)
+
+    cleaned_prices = _build_cleaned_portfolio_price_series(
+        portfolio_name,
+        period_type=period_type,
+        exclude_symbols=exclude_symbols,
+    )
+    if not cleaned_prices.empty:
+        fig_c, ax_c = plt.subplots(figsize=(12.0, 5.0))
+        cleaned_prices.plot(ax=ax_c, linewidth=1)
+        ax_c.set_title(f"{portfolio_name.upper()} portfolio stocks - prices ({period_type}, cleaned)")
+        ax_c.set_xlabel("Date")
+        ax_c.set_ylabel("Price")
+        if len(cleaned_prices.columns) > 10:
+            ax_c.legend().remove()
+        else:
+            ax_c.legend(loc="upper left", bbox_to_anchor=(1.01, 1), frameon=False)
+        fig_c.tight_layout()
+
+        cleaned_suffix = suffix + "_cleaned"
+        cleaned_file = cleaned_dir / f"{portfolio_name}_{period_type}_portfolio_line{cleaned_suffix}.png"
+        fig_c.savefig(cleaned_file)
+        plt.close(fig_c)
+
     return out_file
 
 
@@ -259,6 +362,29 @@ def plot_index_price_line(
     out_file = out_dir / f"{portfolio_name}_{period_type}_index_line.png"
     fig.savefig(out_file)
     plt.close(fig)
+
+    # Also create a cleaned version of the index series and save it in the
+    # mirrored folder structure under Results/plots/cleaned.
+    cleaned_dir = DEFAULT_CLEANED_PLOTS_DIR / "index_line"
+    cleaned_dir.mkdir(parents=True, exist_ok=True)
+
+    cleaned_series = _build_cleaned_index_price_series(
+        portfolio_name,
+        period_type=period_type,
+    )
+    if not cleaned_series.empty:
+        fig_c, ax_c = plt.subplots(figsize=(12, 5))
+        ax_c.plot(cleaned_series.index, cleaned_series.values, label=cleaned_series.name)
+        ax_c.set_title(f"{cleaned_series.name} index price ({period_type}, cleaned)")
+        ax_c.set_xlabel("Date")
+        ax_c.set_ylabel("Price")
+        ax_c.legend(loc="upper left", frameon=False)
+        fig_c.tight_layout()
+
+        cleaned_file = cleaned_dir / f"{portfolio_name}_{period_type}_index_line_cleaned.png"
+        fig_c.savefig(cleaned_file)
+        plt.close(fig_c)
+
     return out_file
 
 
@@ -337,7 +463,7 @@ def plot_portfolio_structure_overview(
     fig.savefig(overview_file)
     plt.close(fig)
 
-    # Additionally: save each component as its own figure
+    # Additionally: save each raw component as its own figure
 
     # 1) Equal-weight portfolio price
     fig_p, ax_p = plt.subplots(figsize=(8.0, 4.0))
@@ -390,5 +516,113 @@ def plot_portfolio_structure_overview(
     corr_file = out_dir / f"{portfolio_name}_{period_type}_structure_corr_heatmap.png"
     fig_c.savefig(corr_file)
     plt.close(fig_c)
+
+    # ------------------------------------------------------------------
+    # Cleaned-data structure plots (mirrored folder system under cleaned/)
+    # ------------------------------------------------------------------
+    cleaned_dir = DEFAULT_CLEANED_PLOTS_DIR / "portfolio_structure" / period_type
+    cleaned_dir.mkdir(parents=True, exist_ok=True)
+
+    prices_clean = _build_cleaned_portfolio_price_series(portfolio_name, period_type=period_type)
+    if not prices_clean.empty:
+        returns_clean = np.log(prices_clean / prices_clean.shift(1))
+        returns_clean = returns_clean.replace([np.inf, -np.inf], np.nan).dropna(how="all")
+        if not returns_clean.empty:
+            ew_price_clean = prices_clean.mean(axis=1)
+            ew_returns_clean = np.log(ew_price_clean / ew_price_clean.shift(1)).dropna()
+            corr_clean = returns_clean.corr()
+
+            # Overview (cleaned)
+            fig_o, axes_o = plt.subplots(2, 2, figsize=(14.0, 8.0))
+
+            ax_pc = axes_o[0, 0]
+            ax_pc.plot(ew_price_clean.index, ew_price_clean.values)
+            ax_pc.set_title(f"{portfolio_name.upper()} portfolio (equal-weight price, {period_type}, cleaned)")
+            ax_pc.set_xlabel("Date")
+            ax_pc.set_ylabel("Price")
+
+            ax_hc = axes_o[0, 1]
+            ax_hc.hist(ew_returns_clean.values, bins=30, edgecolor="black")
+            ax_hc.set_title(f"{portfolio_name.upper()} portfolio log returns (histogram, cleaned)")
+            ax_hc.set_xlabel("Log return")
+            ax_hc.set_ylabel("Frequency")
+
+            ax_bc = axes_o[1, 0]
+            ax_bc.boxplot(
+                [returns_clean[col].dropna().values for col in returns_clean.columns],
+                labels=returns_clean.columns,
+                vert=True,
+                patch_artist=True,
+            )
+            ax_bc.set_title("Per-stock log return dispersion (cleaned)")
+            ax_bc.set_ylabel("Log return")
+            ax_bc.tick_params(axis="x", rotation=45)
+
+            ax_cc = axes_o[1, 1]
+            imc = ax_cc.imshow(corr_clean.values, cmap="coolwarm", vmin=-1, vmax=1)
+            ax_cc.set_title("Correlation of per-stock log returns (cleaned)")
+            ax_cc.set_xticks(range(len(corr_clean.columns)))
+            ax_cc.set_xticklabels(corr_clean.columns, rotation=45, ha="right")
+            ax_cc.set_yticks(range(len(corr_clean.index)))
+            ax_cc.set_yticklabels(corr_clean.index)
+            fig_o.colorbar(imc, ax=ax_cc, fraction=0.046, pad=0.04)
+
+            fig_o.tight_layout()
+            overview_clean_file = cleaned_dir / f"{portfolio_name}_{period_type}_structure_overview_cleaned.png"
+            fig_o.savefig(overview_clean_file)
+            plt.close(fig_o)
+
+            # 1) Equal-weight portfolio price (cleaned)
+            fig_pc, ax_pc2 = plt.subplots(figsize=(8.0, 4.0))
+            ax_pc2.plot(ew_price_clean.index, ew_price_clean.values)
+            ax_pc2.set_title(f"{portfolio_name.upper()} portfolio (equal-weight price, {period_type}, cleaned)")
+            ax_pc2.set_xlabel("Date")
+            ax_pc2.set_ylabel("Price")
+            fig_pc2 = fig_pc
+            fig_pc2.tight_layout()
+            price_clean_file = cleaned_dir / f"{portfolio_name}_{period_type}_structure_price_cleaned.png"
+            fig_pc2.savefig(price_clean_file)
+            plt.close(fig_pc2)
+
+            # 2) Histogram of equal-weight log returns (cleaned)
+            fig_hc2, ax_hc2 = plt.subplots(figsize=(6.0, 4.0))
+            ax_hc2.hist(ew_returns_clean.values, bins=30, edgecolor="black")
+            ax_hc2.set_title(f"{portfolio_name.upper()} portfolio log returns (histogram, cleaned)")
+            ax_hc2.set_xlabel("Log return")
+            ax_hc2.set_ylabel("Frequency")
+            fig_hc2.tight_layout()
+            hist_clean_file = cleaned_dir / f"{portfolio_name}_{period_type}_structure_ew_returns_hist_cleaned.png"
+            fig_hc2.savefig(hist_clean_file)
+            plt.close(fig_hc2)
+
+            # 3) Boxplot of per-stock log returns (cleaned)
+            fig_bc2, ax_bc2 = plt.subplots(figsize=(10.0, 4.0))
+            ax_bc2.boxplot(
+                [returns_clean[col].dropna().values for col in returns_clean.columns],
+                labels=returns_clean.columns,
+                vert=True,
+                patch_artist=True,
+            )
+            ax_bc2.set_title("Per-stock log return dispersion (cleaned)")
+            ax_bc2.set_ylabel("Log return")
+            ax_bc2.tick_params(axis="x", rotation=45)
+            fig_bc2.tight_layout()
+            box_clean_file = cleaned_dir / f"{portfolio_name}_{period_type}_structure_stock_returns_box_cleaned.png"
+            fig_bc2.savefig(box_clean_file)
+            plt.close(fig_bc2)
+
+            # 4) Correlation heatmap of per-stock log returns (cleaned)
+            fig_cc2, ax_cc2 = plt.subplots(figsize=(8.0, 6.0))
+            imc2 = ax_cc2.imshow(corr_clean.values, cmap="coolwarm", vmin=-1, vmax=1)
+            ax_cc2.set_title("Correlation of per-stock log returns (cleaned)")
+            ax_cc2.set_xticks(range(len(corr_clean.columns)))
+            ax_cc2.set_xticklabels(corr_clean.columns, rotation=45, ha="right")
+            ax_cc2.set_yticks(range(len(corr_clean.index)))
+            ax_cc2.set_yticklabels(corr_clean.index)
+            fig_cc2.colorbar(imc2, ax=ax_cc2, fraction=0.046, pad=0.04)
+            fig_cc2.tight_layout()
+            corr_clean_file = cleaned_dir / f"{portfolio_name}_{period_type}_structure_corr_heatmap_cleaned.png"
+            fig_cc2.savefig(corr_clean_file)
+            plt.close(fig_cc2)
 
     return overview_file
