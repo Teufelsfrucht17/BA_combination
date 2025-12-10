@@ -11,6 +11,8 @@ from copy import deepcopy
 
 DEFAULT_CONFIG = {
     "data": {
+        "use_lseg_api": True,
+        "storage_dir": "DataStorage",
         "portfolios": {},
         "common_indices": [],
         "fields": ["OPEN_PRC", "HIGH_1", "LOW_1", "TRDPRC_1", "ACVOL_1"],

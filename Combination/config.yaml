@@ -1,4 +1,5 @@
 data:
+  use_lseg_api: false  # True = LSEG API + Excels aktualisieren, False = vorhandene Excels aus DataStorage nutzen
   portfolios:
     dax:
       name: "DAX Portfolio"

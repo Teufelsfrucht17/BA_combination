@@ -1,18 +1,112 @@
 """
 Datagrabber.py - Extended version for BA_combination
 Retrieves both daily and 30-minute data based on config.yaml
+Supports two modes controlled via config:
+  - data.use_lseg_api = True  -> use LSEG API and update Excel cache
+  - data.use_lseg_api = False -> skip API calls and load from cached Excels in DataStorage
 """
 
 import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
 import LSEG as LS
 from ConfigManager import ConfigManager
 
 
+def _clean_column_name(raw_name: object, index_prefix: Optional[str] = None) -> str:
+    """
+    Normalize column names from Excel sheets.
+
+    This is equivalent to the helper used in the BA_trading_walkthrough notebook
+    so that cached Excels created by exceltextwriter can be re-loaded in a robust way.
+    """
+    col = str(raw_name)
+    if col == "TRDPRC_1" and index_prefix:
+        return f"{index_prefix}_TRDPRC_1"
+    col = col.replace("(", "").replace(")", "").replace("'", "")
+    col = col.replace(" ", "").replace(",", "_")
+    col = col.replace("__", "_").strip("_")
+    return col
+
+
+def _load_price_excel(excel_path: Path, index_prefix: Optional[str] = None) -> pd.DataFrame:
+    """
+    Load price data from an Excel file created by exceltextwriter.
+
+    The resulting DataFrame matches the structure expected by Dataprep/FamaFrench.
+    """
+    if not excel_path.exists():
+        raise FileNotFoundError(f"Datei fehlt: {excel_path}")
+
+    sheets = pd.read_excel(excel_path, sheet_name=None)
+    merged: Optional[pd.DataFrame] = None
+
+    for _, df in sheets.items():
+        if df is None or df.empty:
+            continue
+
+        if "Date" not in df.columns:
+            df = df.rename(columns={df.columns[0]: "Date"})
+
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date"])
+
+        value_cols = [c for c in df.columns if c != "Date"]
+        if not value_cols:
+            continue
+
+        for col in value_cols:
+            cleaned = _clean_column_name(col, index_prefix=index_prefix)
+            series = pd.to_numeric(df[col], errors="coerce")
+            tmp = pd.DataFrame({cleaned: series.values}, index=df["Date"])
+            merged = tmp if merged is None else merged.join(tmp, how="outer")
+
+    if merged is None:
+        raise ValueError(f"Keine gueltigen Daten in {excel_path}")
+
+    merged.index = pd.to_datetime(merged.index)
+    return merged.sort_index()
+
+
+def _load_company_excel(excel_path: Path) -> pd.DataFrame:
+    """
+    Load company/fundamental data from an Excel file created by exceltextwriter.
+    """
+    if not excel_path.exists():
+        raise FileNotFoundError(f"Datei fehlt: {excel_path}")
+
+    sheets = pd.read_excel(excel_path, sheet_name=None)
+    merged: Optional[pd.DataFrame] = None
+
+    for name, df in sheets.items():
+        if df is None or df.empty:
+            continue
+
+        if "Date" not in df.columns:
+            df = df.rename(columns={df.columns[0]: "Date"})
+
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date"])
+
+        value_cols = [c for c in df.columns if c != "Date"]
+        if not value_cols:
+            continue
+
+        cleaned_cols = {col: _clean_column_name(f"{name}_{col}") for col in value_cols}
+        tmp = df[["Date"] + value_cols].rename(columns=cleaned_cols).set_index("Date")
+        merged = tmp if merged is None else merged.join(tmp, how="outer")
+
+    if merged is None:
+        raise ValueError(f"Keine gueltigen Company-Daten in {excel_path}")
+
+    merged.index = pd.to_datetime(merged.index)
+    return merged.sort_index()
+
+
 class DataGrabber:
-    """Data grabber with config support"""
+    """Data grabber with config support (API or cached Excel)."""
 
     def __init__(self, config_path: str = "config.yaml"):
         """
@@ -22,19 +116,62 @@ class DataGrabber:
             config_path: Path to the config file
         """
         self.config = ConfigManager(config_path)
+        self._cached_prices: Optional[Dict[str, Dict[str, pd.DataFrame]]] = None
+        self._cached_companies: Optional[Dict[str, pd.DataFrame]] = None
+
+    def _use_lseg_api(self) -> bool:
+        return bool(self.config.get("data.use_lseg_api", True))
+
+    def _get_storage_dir(self) -> Path:
+        storage_dir = self.config.get("data.storage_dir", "DataStorage")
+        return Path(storage_dir)
+
+    def _load_cached_data(self) -> Tuple[Dict[str, Dict[str, pd.DataFrame]], Dict[str, pd.DataFrame]]:
+        """
+        Load cached price and company data from Excel files in storage_dir.
+        """
+        portfolios = self.config.get("data.portfolios", {})
+        data_dir = self._get_storage_dir()
+
+        price_data: Dict[str, Dict[str, pd.DataFrame]] = {}
+        company_data: Dict[str, pd.DataFrame] = {}
+
+        for p_name, p_cfg in portfolios.items():
+            p_cfg = p_cfg or {}
+            index_prefix = p_cfg.get("index", "").replace(".", "")
+            price_data[p_name] = {}
+
+            for period in ["daily", "intraday"]:
+                excel_path = data_dir / f"{p_name}_{period}.xlsx"
+                if excel_path.exists():
+                    price_data[p_name][period] = _load_price_excel(excel_path, index_prefix=index_prefix)
+                else:
+                    print(f"WARNUNG: {excel_path} fehlt.")
+
+            comp_path = data_dir / f"{p_name}_company_data.xlsx"
+            if comp_path.exists():
+                company_data[p_name] = _load_company_excel(comp_path)
+            else:
+                print(f"Hinweis: {comp_path} nicht gefunden (FFC optional).")
+
+        return price_data, company_data
+
+    def _ensure_cached_loaded(self) -> None:
+        if self._cached_prices is None or self._cached_companies is None:
+            self._cached_prices, self._cached_companies = self._load_cached_data()
 
     def fetch_all_data(self) -> Dict[str, Dict[str, pd.DataFrame]]:
         """
-        Fetch data for all portfolios (DAX, SDAX) and both periods (daily, intraday)
+        Fetch data for all portfolios (DAX, SDAX) and both periods (daily, intraday).
 
-        Returns:
-            Dictionary: {portfolio_name: {period_type: DataFrame}}
-            Example: {"dax": {"daily": df, "intraday": df}, "sdax": {...}}
-
-        Raises:
-            ValueError: If portfolio or period is missing
-            RuntimeError: If API calls fail
+        Behaviour depends on config:
+          - data.use_lseg_api = True  -> pull via LSEG API and update Excel cache
+          - data.use_lseg_api = False -> load from existing Excel cache only
         """
+        if not self._use_lseg_api():
+            self._ensure_cached_loaded()
+            return self._cached_prices or {}
+
         all_data: Dict[str, Dict[str, pd.DataFrame]] = {}
         portfolios = self.config.get("data.portfolios", {})
 
@@ -49,7 +186,7 @@ class DataGrabber:
 
     def fetch_portfolio_data(self, portfolio_name: str, period_type: str) -> pd.DataFrame:
         """
-        Fetch data for a specific portfolio and period
+        Fetch data for a specific portfolio and period using the LSEG API.
 
         Args:
             portfolio_name: Portfolio name (e.g. "dax", "sdax")
@@ -81,7 +218,7 @@ class DataGrabber:
             fields=self.config.get("data.fields"),
             start=start,
             end=end,
-            interval=interval
+            interval=interval,
         )
         portfolio_df = _prefix_single_universe(portfolio_df, universe)
 
@@ -93,7 +230,7 @@ class DataGrabber:
                 fields=["TRDPRC_1"],
                 start=start,
                 end=end,
-                interval=interval
+                interval=interval,
             )
             index_df = _prefix_single_universe(index_df, [portfolio_index])
 
@@ -105,7 +242,7 @@ class DataGrabber:
                 fields=["TRDPRC_1"],
                 start=start,
                 end=end,
-                interval=interval
+                interval=interval,
             )
             common_df = _prefix_single_universe(common_df, common_indices)
             print(f"Common indices fetched ({len(common_indices)}): {common_df.shape}")
@@ -122,9 +259,13 @@ class DataGrabber:
     def fetch_company_data(self) -> Dict[str, pd.DataFrame]:
         """
         Fetch fundamental company data for all portfolios (DAX, SDAX)
-        
+
         These data are used for Fama-French/Carhart models.
         Creates separate Excel files for each portfolio.
+
+        Behaviour depends on config:
+          - data.use_lseg_api = True  -> pull via LSEG API and update Excel cache
+          - data.use_lseg_api = False -> load from existing Excel cache only
 
         Returns:
             Dictionary: {portfolio_name: DataFrame}
@@ -134,6 +275,10 @@ class DataGrabber:
             ValueError: If portfolio is missing
             RuntimeError: If API calls fail
         """
+        if not self._use_lseg_api():
+            self._ensure_cached_loaded()
+            return self._cached_companies or {}
+
         all_company_data: Dict[str, pd.DataFrame] = {}
         portfolios = self.config.get("data.portfolios", {})
 
@@ -144,10 +289,10 @@ class DataGrabber:
             period_config = self.config.get("data.periods.daily")
             if period_config:
                 company_params = {
-                    'Curn': 'USD',
-                    'SDate': period_config.get('start', '2024-01-01'),
-                    'EDate': period_config.get('end', '2025-11-15'),
-                    'Frq': 'D'
+                    "Curn": "USD",
+                    "SDate": period_config.get("start", "2024-01-01"),
+                    "EDate": period_config.get("end", "2025-11-15"),
+                    "Frq": "D",
                 }
                 company_df = LS.getCompanyData(universe=universe, parameters=company_params)
             else:
@@ -238,7 +383,7 @@ class DataGrabber:
                         d = d.rename(columns={c: "Date"})
                     break
 
-        out_dir = Path("DataStorage")
+        out_dir = self._get_storage_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"{name}.xlsx"
 

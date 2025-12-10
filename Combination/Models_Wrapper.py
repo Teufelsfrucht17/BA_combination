@@ -29,8 +29,6 @@ DEFAULT_SCHEDULER_PATIENCE = 10
 DEFAULT_EPSILON = 1e-8
 DEFAULT_DROPOUT = 0.2
 DEFAULT_EPOCH_PRINT_INTERVAL = 50
-
-
 def directional_accuracy(y_true: Union[np.ndarray, pd.Series, List], y_pred: Union[np.ndarray, pd.Series, List]) -> float:
     """Calculate directional accuracy (matching signs)."""
     if len(y_true) == 0:
@@ -101,6 +99,7 @@ def train_pytorch_model(
         standardize_target: Whether to standardize the target
         portfolio_name: Optional portfolio name for loss logs
         period_type: Optional period name for loss logs
+        visualize_model: If True, saves architecture/graph visualizations
 
     Returns:
         model: Trained PyTorch model
@@ -292,15 +291,6 @@ def train_pytorch_model(
         y_train_true = y_train_t.cpu().numpy().flatten()
         y_test_true = y_test_t.cpu().numpy().flatten()
 
-    if portfolio_name and period_type:
-        curves_path = Path("Results") / f"pytorch_training_{portfolio_name}_{period_type}.csv"
-        curves_path.parent.mkdir(exist_ok=True)
-        pd.DataFrame({
-            "epoch": np.arange(1, len(train_losses) + 1),
-            "train_loss": train_losses,
-            "val_loss": val_losses
-        }).to_csv(curves_path, index=False)
-
     metrics = {
         'r2': r2_score(y_test_true, y_test_pred),
         'mse': mean_squared_error(y_test_true, y_test_pred),
@@ -309,7 +299,8 @@ def train_pytorch_model(
         'directional_accuracy': directional_accuracy(y_test_true, y_test_pred),
         'directional_accuracy_train': directional_accuracy(y_train_true, y_train_pred),
         'best_val_loss': best_val_loss,
-        'stopped_at_epoch': best_epoch if best_epoch else epoch + 1,
+        'best_epoch': best_epoch if best_epoch else len(train_losses),
+        'stopped_at_epoch': len(train_losses),
         'loss_curve_train': train_losses,
         'loss_curve_val': val_losses
     }

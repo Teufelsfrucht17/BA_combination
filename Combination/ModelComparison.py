@@ -201,7 +201,7 @@ class ModelComparison:
                     "early_stopping_patience": self.config.get("models.pytorch_nn.early_stopping_patience", 20),
                     "use_scheduler": True,
                     "scheduler_patience": self.config.get("models.pytorch_nn.scheduler_patience", 10),
-                    "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
+                    "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0)
                 }
                 param_grid = self.config.get("models.pytorch_nn.optuna.param_grid", {})
                 n_trials = self.config.get("models.pytorch_nn.optuna.n_trials", None)
