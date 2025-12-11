@@ -586,31 +586,5 @@ def train_random_forest(
 
 
 
-def train_naive_baseline(
-    X_train: Union[pd.DataFrame, np.ndarray],
-    y_train: Union[pd.Series, np.ndarray],
-    X_test: Union[pd.DataFrame, np.ndarray],
-    y_test: Union[pd.Series, np.ndarray]
-) -> Tuple[None, Dict[str, Any]]:
-    """
-    Train a naive baseline for time series.
-
-    The model predicts y_pred[t] = y[t-1]; serves as a benchmark.
-    """
-    y_train_pred = np.concatenate([[0.0], y_train.values[:-1]])
-    y_test_pred = np.concatenate([[y_train.iloc[-1]], y_test.values[:-1]])
-
-    metrics = {
-        'r2': r2_score(y_test, y_test_pred),
-        'mse': mean_squared_error(y_test, y_test_pred),
-        'mae': mean_absolute_error(y_test, y_test_pred),
-        'train_r2': r2_score(y_train, y_train_pred),
-        'directional_accuracy': directional_accuracy(y_test, y_test_pred),
-        'directional_accuracy_train': directional_accuracy(y_train, y_train_pred),
-    }
-
-    return None, metrics
-
-
 if __name__ == "__main__":
     nn.Module()

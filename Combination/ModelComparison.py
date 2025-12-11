@@ -19,8 +19,7 @@ from Models_Wrapper import (
     tune_pytorch_model_optuna,
     train_ols,
     train_ridge,
-    train_random_forest,
-    train_naive_baseline
+    train_random_forest
 )
 import LSEG as LS
 from logger_config import get_logger
@@ -234,13 +233,6 @@ class ModelComparison:
                 }
 
         model_configs = {
-            "naive_baseline": {
-                "enabled": True,
-                "train_func": train_naive_baseline,
-                "display_name": "Baseline Model (Naive Predictor)",
-                "get_kwargs": lambda: {},
-                "extra_info": "Baseline used as a benchmark (should be outperformed by ML models)"
-            },
             "pytorch_nn": {
                 "enabled": self.config.get("models.pytorch_nn.enabled", False),
                 "train_func": pytorch_train_func,
@@ -279,7 +271,7 @@ class ModelComparison:
         active_models_set = set(active_models) if isinstance(active_models, (list, tuple, set)) else set()
 
         for model_name, config in model_configs.items():
-            if model_name != "naive_baseline" and active_models_set and model_name not in active_models_set:
+            if active_models_set and model_name not in active_models_set:
                 continue
 
             if not config["enabled"]:
@@ -397,62 +389,11 @@ class ModelComparison:
         if df_comparison.empty:
             return
 
-        df_comparison['Portfolio_Period'] = df_comparison['Portfolio'] + "_" + df_comparison['Period']
-        pivot_r2 = df_comparison.pivot_table(
-            index='Model',
-            columns='Portfolio_Period',
-            values='R2_Test',
-            aggfunc='mean'
-        )
-        pivot_mse = df_comparison.pivot_table(
-            index='Model',
-            columns='Portfolio_Period',
-            values='MSE',
-            aggfunc='mean'
-        )
-
-        pivot_portfolio = df_comparison.pivot_table(
-            index='Model',
-            columns=['Portfolio', 'Period'],
-            values='R2_Test'
-        )
-
-        ffc_diff = None
-        unique_ffc_flags = set(df_comparison.get("FFC_Factors", []))
-        if {"Yes", "No"}.issubset(unique_ffc_flags):
-            metrics = ["R2_Test", "MSE", "MAE", "Directional_Accuracy"]
-            pivot_ffc = df_comparison.pivot_table(
-                index=["Portfolio", "Period", "Model"],
-                columns="FFC_Factors",
-                values=metrics
-            )
-
-            if not pivot_ffc.empty:
-                pivot_ffc.columns = [f"{metric}_{flag}" for metric, flag in pivot_ffc.columns]
-
-                if all(col in pivot_ffc.columns for col in ["R2_Test_No", "R2_Test_Yes"]):
-                    pivot_ffc["R2_Test_Delta"] = pivot_ffc["R2_Test_Yes"] - pivot_ffc["R2_Test_No"]
-                if all(col in pivot_ffc.columns for col in ["MSE_No", "MSE_Yes"]):
-                    pivot_ffc["MSE_Delta"] = pivot_ffc["MSE_Yes"] - pivot_ffc["MSE_No"]
-                if all(col in pivot_ffc.columns for col in ["MAE_No", "MAE_Yes"]):
-                    pivot_ffc["MAE_Delta"] = pivot_ffc["MAE_Yes"] - pivot_ffc["MAE_No"]
-                if all(col in pivot_ffc.columns for col in ["Directional_Accuracy_No", "Directional_Accuracy_Yes"]):
-                    pivot_ffc["Directional_Accuracy_Delta"] = (
-                        pivot_ffc["Directional_Accuracy_Yes"] - pivot_ffc["Directional_Accuracy_No"]
-                    )
-
-                ffc_diff = pivot_ffc.reset_index()
-
         output_path = Path("Results") / "model_comparison.xlsx"
         output_path.parent.mkdir(exist_ok=True)
 
         with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
             df_comparison.to_excel(writer, sheet_name='Full_Comparison', index=False)
-            pivot_r2.to_excel(writer, sheet_name='R2_by_Portfolio_Period')
-            pivot_mse.to_excel(writer, sheet_name='MSE_by_Portfolio_Period')
-            pivot_portfolio.to_excel(writer, sheet_name='R2_Hierarchical')
-            if ffc_diff is not None:
-                ffc_diff.to_excel(writer, sheet_name="FFC_Diff", index=False)
 
         if self.config.get("output.save_models"):
             self.save_models()
