@@ -49,6 +49,9 @@ DEFAULT_CONFIG = {
             "weight_decay": 0.0005,
             "early_stopping_patience": 40,
             "scheduler_patience": 15,
+            "use_scheduler": True,
+            "standardize_target": True,
+            "dropout": 0.2,
             "visualize_model": False,
             "optuna": {
                 "enabled": False,
@@ -67,13 +70,25 @@ DEFAULT_CONFIG = {
         },
         "ridge": {
             "enabled": True,
-            "alpha_values": [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+            "alpha_values": [0.1, 0.5, 1.0, 2.0, 5.0, 10.0],
+            "fit_intercept_options": [True, False]
         },
         "random_forest": {
             "enabled": False,
+            "use_gridsearch": True,
+            "random_state": 42,
             "n_estimators": 300,
             "max_depth": 10,
-            "min_samples_split": 5
+            "min_samples_split": 5,
+            "min_samples_leaf": 1,
+            "max_features": "sqrt",
+            "param_grid": {
+                "n_estimators": [100, 200, 300],
+                "max_depth": [5, 10, 15, None],
+                "min_samples_split": [2, 5, 10],
+                "min_samples_leaf": [1, 2, 4],
+                "max_features": ["sqrt", "log2", None]
+            }
         }
     },
     "training": {

@@ -70,10 +70,13 @@ models:
     weight_decay: 0.0005
     early_stopping_patience: 40
     scheduler_patience: 15
+    use_scheduler: true
+    standardize_target: true
+    dropout: 0.2
     visualize_model: true
     optuna:
       enabled: true
-      n_trials:
+      n_trials: null
       param_grid:
         hidden1: [64, 128]
         hidden2: [32, 64]
@@ -87,12 +90,23 @@ models:
   ridge:
     enabled: true
     alpha_values: [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+    fit_intercept_options: [true, false]
 
   random_forest:
     enabled: false
+    use_gridsearch: true
+    random_state: 42
     n_estimators: 300
     max_depth: 10
     min_samples_split: 5
+    min_samples_leaf: 1
+    max_features: "sqrt"
+    param_grid:
+      n_estimators: [100, 200, 300]
+      max_depth: [5, 10, 15, null]
+      min_samples_split: [2, 5, 10]
+      min_samples_leaf: [1, 2, 4]
+      max_features: ["sqrt", "log2", null]
 
 training:
   ffc_runs: true

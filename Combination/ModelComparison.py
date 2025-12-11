@@ -15,6 +15,7 @@ from Dataprep import DataPrep, time_series_split
 from ConfigManager import ConfigManager
 from FamaFrench import FamaFrenchFactorModel, calculate_fama_french_factors
 from Models_Wrapper import (
+    DEFAULT_RANDOM_SEED,
     train_pytorch_model,
     tune_pytorch_model_optuna,
     train_ols,
@@ -198,9 +199,11 @@ class ModelComparison:
                     "lr": self.config.get("models.pytorch_nn.learning_rate", 0.001),
                     "validation_split": self.config.get("models.pytorch_nn.validation_split", 0.2),
                     "early_stopping_patience": self.config.get("models.pytorch_nn.early_stopping_patience", 20),
-                    "use_scheduler": True,
+                    "use_scheduler": self.config.get("models.pytorch_nn.use_scheduler", True),
                     "scheduler_patience": self.config.get("models.pytorch_nn.scheduler_patience", 10),
-                    "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0)
+                    "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
+                    "standardize_target": self.config.get("models.pytorch_nn.standardize_target", True),
+                    "dropout": self.config.get("models.pytorch_nn.dropout", 0.2)
                 }
                 param_grid = self.config.get("models.pytorch_nn.optuna.param_grid", {})
                 n_trials = self.config.get("models.pytorch_nn.optuna.n_trials", None)
@@ -224,13 +227,20 @@ class ModelComparison:
                     "lr": self.config.get("models.pytorch_nn.learning_rate", 0.001),
                     "validation_split": self.config.get("models.pytorch_nn.validation_split", 0.2),
                     "early_stopping_patience": self.config.get("models.pytorch_nn.early_stopping_patience", 20),
-                    "use_scheduler": True,
+                    "use_scheduler": self.config.get("models.pytorch_nn.use_scheduler", True),
                     "scheduler_patience": self.config.get("models.pytorch_nn.scheduler_patience", 10),
                     "weight_decay": self.config.get("models.pytorch_nn.weight_decay", 0.0),
+                    "standardize_target": self.config.get("models.pytorch_nn.standardize_target", True),
+                    "dropout": self.config.get("models.pytorch_nn.dropout", 0.2),
                     "portfolio_name": portfolio_name,
                     "period_type": period_type,
                     "visualize_model": self.config.get("models.pytorch_nn.visualize_model", False)
                 }
+
+        rf_use_gridsearch = self.config.get(
+            "models.random_forest.use_gridsearch",
+            self.config.get("training.cross_validation.enabled", True)
+        )
 
         model_configs = {
             "pytorch_nn": {
@@ -250,7 +260,9 @@ class ModelComparison:
                 "train_func": train_ridge,
                 "display_name": "Ridge Regression",
                 "get_kwargs": lambda: {
-                    "alpha_values": self.config.get("models.ridge.alpha_values", [0.1, 0.5, 1.0, 2.0, 5.0, 10.0])
+                    "alpha_values": self.config.get("models.ridge.alpha_values", [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]),
+                    "fit_intercept_options": self.config.get("models.ridge.fit_intercept_options", [True, False]),
+                    "n_splits": self.config.get("training.cross_validation.n_splits", 5)
                 }
             },
             "random_forest": {
@@ -261,8 +273,12 @@ class ModelComparison:
                     "n_estimators": self.config.get("models.random_forest.n_estimators", 300),
                     "max_depth": self.config.get("models.random_forest.max_depth", 10),
                     "min_samples_split": self.config.get("models.random_forest.min_samples_split", 5),
+                    "min_samples_leaf": self.config.get("models.random_forest.min_samples_leaf", 1),
+                    "max_features": self.config.get("models.random_forest.max_features", "sqrt"),
                     "n_splits": self.config.get("training.cross_validation.n_splits", 5),
-                    "use_gridsearch": self.config.get("training.cross_validation.enabled", True)
+                    "use_gridsearch": rf_use_gridsearch,
+                    "param_grid": self.config.get("models.random_forest.param_grid", {}),
+                    "random_state": self.config.get("models.random_forest.random_state", DEFAULT_RANDOM_SEED)
                 }
             }
         }

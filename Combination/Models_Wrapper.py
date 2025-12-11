@@ -42,15 +42,22 @@ def directional_accuracy(y_true: Union[np.ndarray, pd.Series, List], y_pred: Uni
 class SimpleNet(nn.Module):
     """Simple MLP with two hidden layers"""
 
-    def __init__(self, in_features: int, hidden1: int = 64, hidden2: int = 32, out_features: int = 1):
+    def __init__(
+        self,
+        in_features: int,
+        hidden1: int = 64,
+        hidden2: int = 32,
+        out_features: int = 1,
+        dropout: float = DEFAULT_DROPOUT
+    ):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(in_features, hidden1),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(dropout),
             nn.Linear(hidden1, hidden2),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(dropout),
             nn.Linear(hidden2, out_features),
         )
 
@@ -73,6 +80,7 @@ def train_pytorch_model(
     use_scheduler: bool = True,
     scheduler_patience: int = DEFAULT_SCHEDULER_PATIENCE,
     weight_decay: float = 0.0,
+    dropout: float = DEFAULT_DROPOUT,
     standardize_target: bool = True,
     portfolio_name: Optional[str] = None,
     period_type: Optional[str] = None,
@@ -96,6 +104,7 @@ def train_pytorch_model(
         use_scheduler: Enable learning rate scheduler
         scheduler_patience: Patience for scheduler
         weight_decay: L2 regularization
+        dropout: Dropout rate applied after each hidden layer
         standardize_target: Whether to standardize the target
         portfolio_name: Optional portfolio name for loss logs
         period_type: Optional period name for loss logs
@@ -142,7 +151,13 @@ def train_pytorch_model(
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
 
     n_features = X_train_t.shape[1]
-    model = SimpleNet(in_features=n_features, hidden1=hidden1, hidden2=hidden2, out_features=1).to(device)
+    model = SimpleNet(
+        in_features=n_features,
+        hidden1=hidden1,
+        hidden2=hidden2,
+        out_features=1,
+        dropout=dropout
+    ).to(device)
 
     if visualize_model:
         try:
@@ -197,11 +212,11 @@ def train_pytorch_model(
                 arch.node("input", f"Input|neurons={n_features}")
                 arch.node(
                     "hidden1",
-                    f"Hidden1|neurons={hidden1}|Linear({n_features},{hidden1})|ReLU|Dropout(p=0.2)",
+                    f"Hidden1|neurons={hidden1}|Linear({n_features},{hidden1})|ReLU|Dropout(p={dropout})",
                 )
                 arch.node(
                     "hidden2",
-                    f"Hidden2|neurons={hidden2}|Linear({hidden1},{hidden2})|ReLU|Dropout(p=0.2)",
+                    f"Hidden2|neurons={hidden2}|Linear({hidden1},{hidden2})|ReLU|Dropout(p={dropout})",
                 )
                 arch.node("output", f"Output|neurons=1|Linear({hidden2},1)")
 
@@ -463,7 +478,9 @@ def train_ridge(
     y_train: Union[pd.Series, np.ndarray],
     X_test: Union[pd.DataFrame, np.ndarray],
     y_test: Union[pd.Series, np.ndarray],
-    alpha_values: Optional[List[float]] = None
+    alpha_values: Optional[List[float]] = None,
+    fit_intercept_options: Optional[List[bool]] = None,
+    n_splits: int = 5
 ) -> Tuple[Ridge, Dict[str, Any]]:
     """
     Train Ridge regression with a grid search over alpha values.
@@ -471,13 +488,16 @@ def train_ridge(
     if alpha_values is None:
         alpha_values = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
 
+    if fit_intercept_options is None:
+        fit_intercept_options = [True, False]
+
     param_grid = {
         'alpha': alpha_values,
-        'fit_intercept': [True, False]
+        'fit_intercept': fit_intercept_options
     }
 
     ridge = Ridge()
-    tscv = TimeSeriesSplit(n_splits=5)
+    tscv = TimeSeriesSplit(n_splits=n_splits)
 
     grid = GridSearchCV(
         ridge,
@@ -514,22 +534,27 @@ def train_random_forest(
     n_estimators: int = 300,
     max_depth: Optional[int] = 10,
     min_samples_split: int = 5,
+    min_samples_leaf: int = 1,
+    max_features: Optional[Union[int, float, str]] = "sqrt",
     n_splits: int = 5,
-    use_gridsearch: bool = True
+    use_gridsearch: bool = True,
+    param_grid: Optional[Dict[str, List[Any]]] = None,
+    random_state: int = DEFAULT_RANDOM_SEED
 ) -> Tuple[RandomForestRegressor, Dict[str, Any]]:
     """
     Train a RandomForestRegressor with optional hyperparameter tuning.
     """
     if use_gridsearch:
-        param_grid = {
-            'n_estimators': [100, 200, 300],
-            'max_depth': [5, 10, 15, None],
-            'min_samples_split': [2, 5, 10],
-            'min_samples_leaf': [1, 2, 4],
-            'max_features': ['sqrt', 'log2', None]
-        }
+        if not param_grid:
+            param_grid = {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [5, 10, 15, None],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4],
+                'max_features': ['sqrt', 'log2', None]
+            }
 
-        rf = RandomForestRegressor(random_state=42, n_jobs=-1)
+        rf = RandomForestRegressor(random_state=random_state, n_jobs=-1)
         tscv = TimeSeriesSplit(n_splits=n_splits)
 
         grid = GridSearchCV(
@@ -564,7 +589,9 @@ def train_random_forest(
             n_estimators=n_estimators,
             max_depth=max_depth,
             min_samples_split=min_samples_split,
-            random_state=42,
+            min_samples_leaf=min_samples_leaf,
+            max_features=max_features,
+            random_state=random_state,
             n_jobs=-1
         )
 
